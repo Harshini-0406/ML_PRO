@@ -68,8 +68,12 @@ export type MockTestAttempt = {
   resultJson: string;
 };
 
+
 export const initializeDatabase = (
-  dbPath = process.env.DATABASE_PATH ?? path.join(process.cwd(), 'data', 'examiq.db')
+  dbPath = process.env.DATABASE_PATH ??
+    (process.env.RENDER
+      ? '/tmp/examiq.db'
+      : path.join(process.cwd(), 'data', 'examiq.db'))
 ) => {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
