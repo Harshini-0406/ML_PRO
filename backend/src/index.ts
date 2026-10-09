@@ -8,25 +8,35 @@ import { pathToFileURL } from 'node:url';
 
 import {
   createUser,
+  deleteStudyPlan,
+  getMockTestAttemptResults,
+  getMockTestAttemptsByUser,
+  getMockTestQuestions,
   getPracticeAttemptsByUser,
+  getRevisionMistakesByUser,
   getStudyPlansByUser,
   getUserByEmail,
   getUserById,
   initializeDatabase,
   listUsers,
   savePracticeAttempt,
+  saveMockTestAttempt,
   saveStudyPlan,
+  updateStudyPlan,
   upsertTopicMastery,
   getTopicMasteryByUser,
   saveStudentProfile,
   getStudentProfileByUser,
+  updateRevisionMistakeState,
 } from './db.js';
+import { questionCategories } from './questionBank.js';
 
 dotenv.config();
 
 export const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const database = initializeDatabase();
+export const closeDatabase = () => database.close();
 const users = new Map<string, { id: string; name: string; email: string; passwordHash: string; role: string }>();
 const examCatalog = [
   {
@@ -102,51 +112,211 @@ const examCatalog = [
     accent: 'from-indigo-500 to-blue-500',
   },
 ];
-const mockQuestionSet = [
+const buildMockQuestionSet = () => [
   {
-    id: 'q1',
+    id: 'quant-01',
     category: 'Quantitative Aptitude',
     difficulty: 'Easy',
+    questionType: 'multiple-choice',
     prompt: 'If a train travels 180 km in 3 hours, what is its average speed?',
     options: ['45 km/h', '50 km/h', '60 km/h', '75 km/h'],
     correctAnswer: '60 km/h',
     explanation: 'Average speed is total distance divided by total time: 180 ÷ 3 = 60 km/h.',
   },
   {
-    id: 'q2',
+    id: 'quant-02',
+    category: 'Quantitative Aptitude',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'A shopkeeper marks a product 25% above cost price and offers a 10% discount. What is the net profit percentage?',
+    options: ['10%', '12.5%', '15%', '17.5%'],
+    correctAnswer: '12.5%',
+    explanation: 'If the cost price is 100, marked price = 125, selling price after 10% discount = 112.5, so profit = 12.5%.',
+  },
+  {
+    id: 'reasoning-01',
     category: 'Reasoning',
     difficulty: 'Medium',
+    questionType: 'multiple-choice',
     prompt: 'Which number comes next in the sequence: 2, 6, 12, 20, 30, ?',
     options: ['36', '40', '42', '48'],
     correctAnswer: '42',
     explanation: 'The sequence follows n(n + 1): 1×2, 2×3, 3×4, 4×5, 5×6, so the next is 6×7 = 42.',
   },
   {
-    id: 'q3',
+    id: 'reasoning-02',
+    category: 'Reasoning',
+    difficulty: 'Hard',
+    questionType: 'multiple-choice',
+    prompt: 'If all roses are flowers and some flowers fade quickly, which statement must be true?',
+    options: ['All roses fade quickly', 'Some roses fade quickly', 'Some flowers are roses', 'No roses are flowers'],
+    correctAnswer: 'Some flowers are roses',
+    explanation: 'From the premises, roses are a subset of flowers, so some flowers are definitely roses.',
+  },
+  {
+    id: 'di-01',
     category: 'Data Interpretation',
     difficulty: 'Medium',
+    questionType: 'multiple-choice',
     prompt: 'A student scored 80, 75, 90, and 85 in four tests. What is the average score?',
     options: ['80', '83', '85', '87'],
     correctAnswer: '83',
     explanation: 'Total = 330; 330 ÷ 4 = 82.5, which rounds to 83 in this quiz context.',
   },
   {
-    id: 'q4',
+    id: 'verbal-01',
     category: 'Verbal Ability',
     difficulty: 'Easy',
+    questionType: 'multiple-choice',
     prompt: 'Choose the best synonym for the word “meticulous.”',
     options: ['Careless', 'Precise', 'Quick', 'Loud'],
     correctAnswer: 'Precise',
     explanation: 'Meticulous means showing great attention to detail, which aligns closely with precise.',
   },
   {
-    id: 'q5',
+    id: 'verbal-02',
+    category: 'Verbal Ability',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Select the sentence with correct grammar.',
+    options: [
+      'She do not like coffee.',
+      'She does not likes coffee.',
+      'She does not like coffee.',
+      'She not does like coffee.',
+    ],
+    correctAnswer: 'She does not like coffee.',
+    explanation: 'With a singular subject, the verb takes the third-person singular form: “does.”',
+  },
+  {
+    id: 'gk-01',
     category: 'General Awareness',
     difficulty: 'Medium',
+    questionType: 'multiple-choice',
     prompt: 'Which of the following is the capital of Karnataka?',
     options: ['Hyderabad', 'Chennai', 'Bengaluru', 'Pune'],
     correctAnswer: 'Bengaluru',
     explanation: 'Bengaluru is the capital city of Karnataka.',
+  },
+  {
+    id: 'gk-02',
+    category: 'Current Affairs',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Who is credited with discovering the laws of motion?',
+    options: ['Albert Einstein', 'Isaac Newton', 'Galileo Galilei', 'Nikola Tesla'],
+    correctAnswer: 'Isaac Newton',
+    explanation: 'Isaac Newton formulated the laws of motion and universal gravitation.',
+  },
+  {
+    id: 'dsa-01',
+    category: 'DSA',
+    difficulty: 'Hard',
+    questionType: 'multiple-choice',
+    prompt: 'Which data structure follows the LIFO principle?',
+    options: ['Queue', 'Tree', 'Stack', 'Graph'],
+    correctAnswer: 'Stack',
+    explanation: 'A stack uses Last In, First Out ordering, unlike a queue which is FIFO.',
+  },
+  {
+    id: 'dsa-02',
+    category: 'DSA',
+    difficulty: 'Hard',
+    questionType: 'multiple-choice',
+    prompt: 'What is the time complexity of binary search on a sorted array?',
+    options: ['O(n)', 'O(log n)', 'O(n log n)', 'O(1)'],
+    correctAnswer: 'O(log n)',
+    explanation: 'Binary search halves the search space at each step, leading to logarithmic time complexity.',
+  },
+  {
+    id: 'polity-01',
+    category: 'Polity',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Which article of the Indian Constitution guarantees equality before the law?',
+    options: ['Article 14', 'Article 19', 'Article 21', 'Article 32'],
+    correctAnswer: 'Article 14',
+    explanation: 'Article 14 of the Constitution states that the State shall not deny equality before the law.',
+  },
+  {
+    id: 'english-01',
+    category: 'English',
+    difficulty: 'Easy',
+    questionType: 'multiple-choice',
+    prompt: 'Choose the correct antonym of “fragile.”',
+    options: ['Weak', 'Delicate', 'Sturdy', 'Broken'],
+    correctAnswer: 'Sturdy',
+    explanation: 'Sturdy means strong and durable, which is the opposite of fragile.',
+  },
+  {
+    id: 'math-01',
+    category: 'Math',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'The square root of 144 is:',
+    options: ['10', '11', '12', '14'],
+    correctAnswer: '12',
+    explanation: '12 × 12 = 144, so the square root of 144 is 12.',
+  },
+  {
+    id: 'chem-01',
+    category: 'Chemistry',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Which gas is most abundant in Earth’s atmosphere?',
+    options: ['Oxygen', 'Carbon dioxide', 'Nitrogen', 'Hydrogen'],
+    correctAnswer: 'Nitrogen',
+    explanation: 'Nitrogen makes up about 78% of Earth’s atmosphere.',
+  },
+  {
+    id: 'biology-01',
+    category: 'Biology',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Which organ is responsible for pumping blood throughout the body?',
+    options: ['Lungs', 'Brain', 'Heart', 'Kidney'],
+    correctAnswer: 'Heart',
+    explanation: 'The heart circulates blood through the body via the circulatory system.',
+  },
+  {
+    id: 'reasoning-03',
+    category: 'Reasoning',
+    difficulty: 'Easy',
+    questionType: 'multiple-choice',
+    prompt: 'If A is taller than B and B is taller than C, who is the shortest?',
+    options: ['A', 'B', 'C', 'Cannot be determined'],
+    correctAnswer: 'C',
+    explanation: 'Since A > B > C, C is the shortest.',
+  },
+  {
+    id: 'gk-03',
+    category: 'General Awareness',
+    difficulty: 'Easy',
+    questionType: 'multiple-choice',
+    prompt: 'Which planet is known as the Red Planet?',
+    options: ['Venus', 'Mars', 'Jupiter', 'Mercury'],
+    correctAnswer: 'Mars',
+    explanation: 'Mars appears reddish due to iron oxide on its surface.',
+  },
+  {
+    id: 'quant-03',
+    category: 'Quantitative Aptitude',
+    difficulty: 'Hard',
+    questionType: 'multiple-choice',
+    prompt: 'If 15 workers can complete a task in 12 days, how many days will 10 workers take if they work at the same rate?',
+    options: ['16 days', '18 days', '20 days', '24 days'],
+    correctAnswer: '18 days',
+    explanation: 'Work is inversely proportional to the number of workers: 15 × 12 = 180 work-units. With 10 workers, time = 180 ÷ 10 = 18 days.',
+  },
+  {
+    id: 'current-01',
+    category: 'Current Affairs',
+    difficulty: 'Medium',
+    questionType: 'multiple-choice',
+    prompt: 'Which organization is responsible for conducting the Indian General Elections?',
+    options: ['Election Commission of India', 'Parliament of India', 'Supreme Court of India', 'Ministry of Home Affairs'],
+    correctAnswer: 'Election Commission of India',
+    explanation: 'The Election Commission of India is the autonomous constitutional authority responsible for conducting elections.',
   },
 ];
 
@@ -183,51 +353,6 @@ const getToken = (user: { id: string; name: string; email: string; role: string 
     expiresIn: '7d',
   });
 
-const buildWeeklyStudyPlan = (weakArea: string, strongArea: string) => [
-  {
-    day: 'Monday',
-    title: `${weakArea} Foundation`,
-    detail: `Solve 12 focused ${weakArea.toLowerCase()} questions and review every mistaken step.`,
-    durationMinutes: 35,
-  },
-  {
-    day: 'Tuesday',
-    title: 'Mistake Review Sprint',
-    detail: `Revisit the mistakes from your last mock test and build a quick error log for ${weakArea.toLowerCase()}.`,
-    durationMinutes: 30,
-  },
-  {
-    day: 'Wednesday',
-    title: `${strongArea} Confidence Block`,
-    detail: `Keep your strongest area active with a high-confidence practice set to maintain momentum.`,
-    durationMinutes: 25,
-  },
-  {
-    day: 'Thursday',
-    title: `${weakArea} Timed Drill`,
-    detail: `Attempt a timed set of mixed questions and track speed, accuracy, and hesitation.`,
-    durationMinutes: 40,
-  },
-  {
-    day: 'Friday',
-    title: 'Concept Recap',
-    detail: `Create a short revision sheet of formulas, patterns, and rules for ${weakArea.toLowerCase()}.`,
-    durationMinutes: 20,
-  },
-  {
-    day: 'Saturday',
-    title: 'Mock Test Simulation',
-    detail: `Take a mini mock test with a focus on sustained accuracy and question prioritization.`,
-    durationMinutes: 45,
-  },
-  {
-    day: 'Sunday',
-    title: 'Recovery + Reflection',
-    detail: `Review your week, pick one improvement goal, and set the next cycle for ${weakArea.toLowerCase()}.`,
-    durationMinutes: 20,
-  },
-];
-
 const authMiddleware = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -237,22 +362,29 @@ const authMiddleware = (req: any, res: any, next: any) => {
     return;
   }
 
+  let payload: { sub: string; email: string; role: string };
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET ?? 'examiq-dev-secret') as {
+    payload = jwt.verify(token, process.env.JWT_SECRET ?? 'examiq-dev-secret') as {
       sub: string;
       email: string;
       role: string;
     };
-
-    req.user = {
-      id: payload.sub,
-      email: payload.email,
-      role: payload.role,
-    };
-    next();
   } catch {
     res.status(401).json({ message: 'Invalid or expired token.' });
+    return;
   }
+
+  if (!getUserById(database, payload.sub)) {
+    res.status(401).json({ message: 'The account for this session no longer exists. Please sign in again.' });
+    return;
+  }
+
+  req.user = {
+    id: payload.sub,
+    email: payload.email,
+    role: payload.role,
+  };
+  next();
 };
 
 app.get('/api/exams', (_req, res) => {
@@ -506,6 +638,76 @@ app.post('/api/student/profile', authMiddleware, (req, res) => {
   });
 });
 
+app.get('/api/student/study-plan', authMiddleware, (req, res) => {
+  const userId = (req as any).user.id as string;
+  res.json({ items: getStudyPlansByUser(database, userId) });
+});
+
+app.post('/api/student/study-plan', authMiddleware, (req, res) => {
+  const userId = (req as any).user.id as string;
+  const { day, title, detail, durationMinutes } = req.body ?? {};
+  const duration = Number(durationMinutes);
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)
+    || Number.isNaN(Date.parse(`${day}T00:00:00Z`))
+    || typeof title !== 'string' || !title.trim() || title.trim().length > 120
+    || typeof detail !== 'string' || !detail.trim() || detail.trim().length > 500
+    || !Number.isInteger(duration) || duration < 1 || duration > 600) {
+    res.status(400).json({ message: 'Provide a valid date, a title and topic, and a duration from 1 to 600 minutes.' });
+    return;
+  }
+  const item = saveStudyPlan(database, {
+    userId,
+    day,
+    title: title.trim(),
+    detail: detail.trim(),
+    durationMinutes: duration,
+  });
+  res.status(201).json({ item });
+});
+
+app.patch('/api/student/study-plan/:id', authMiddleware, (req, res) => {
+  const planId = Number(req.params.id);
+  const userId = (req as any).user.id as string;
+  const { day, title, detail, durationMinutes, completed } = req.body ?? {};
+  const duration = Number(durationMinutes);
+  if (!Number.isSafeInteger(planId) || planId < 1
+    || typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)
+    || Number.isNaN(Date.parse(`${day}T00:00:00Z`))
+    || typeof title !== 'string' || !title.trim() || title.trim().length > 120
+    || typeof detail !== 'string' || !detail.trim() || detail.trim().length > 500
+    || !Number.isInteger(duration) || duration < 1 || duration > 600
+    || typeof completed !== 'boolean') {
+    res.status(400).json({ message: 'Provide a valid task, date, duration, and completion status.' });
+    return;
+  }
+  const updated = updateStudyPlan(database, userId, planId, {
+    day,
+    title: title.trim(),
+    detail: detail.trim(),
+    durationMinutes: duration,
+    completed,
+  });
+  if (!updated) {
+    res.status(404).json({ message: 'That study-plan task could not be found.' });
+    return;
+  }
+  res.json({ item: getStudyPlansByUser(database, userId).find((item) => item.id === planId) });
+});
+
+app.delete('/api/student/study-plan/:id', authMiddleware, (req, res) => {
+  const planId = Number(req.params.id);
+  const userId = (req as any).user.id as string;
+  if (!Number.isSafeInteger(planId) || planId < 1) {
+    res.status(400).json({ message: 'A valid study-plan task ID is required.' });
+    return;
+  }
+  if (!deleteStudyPlan(database, userId, planId)) {
+    res.status(404).json({ message: 'That study-plan task could not be found.' });
+    return;
+  }
+  res.status(204).end();
+});
+
 app.get('/api/student/dashboard', authMiddleware, (req, res) => {
   const authenticatedRequest = req as any;
   const user = getUserById(database, authenticatedRequest.user.id) ?? users.get(authenticatedRequest.user.email) ?? null;
@@ -526,83 +728,46 @@ app.get('/api/student/dashboard', authMiddleware, (req, res) => {
   };
   const averagePercentage = attempts.length
     ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.percentage, 0) / attempts.length)
-    : 82;
-  const latestAttempt = attempts[0];
-  const readiness = latestAttempt ? Math.min(100, Math.max(0, Math.round((latestAttempt.percentage + averagePercentage) / 2))) : 82;
-  const successProbability = latestAttempt ? Math.min(99, Math.max(0, Math.round((latestAttempt.percentage + averagePercentage) / 2 + 4))) : 91;
-  const weakArea = latestAttempt && latestAttempt.weaknesses
-    ? latestAttempt.weaknesses.split(', ').find(Boolean) ?? 'Quantitative Aptitude'
-    : 'Quantitative Aptitude';
-  const strongArea = 'Logical Reasoning';
-  const recentTrend = attempts.length
-    ? attempts.slice(0, 7).map((attempt) => attempt.percentage).reverse()
-    : [62, 68, 71, 75, 78, 84, 86];
-  const normalizedTrend = recentTrend.length < 7
-    ? [...Array(7 - recentTrend.length).fill(68), ...recentTrend]
-    : recentTrend;
-  const weeklyStudyHours = Number((attempts.length * 4.5 + 12).toFixed(1));
-  const averageAccuracy = attempts.length
-    ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.percentage, 0) / attempts.length)
-    : 78;
-
-  const upcomingPlan = [
-    { title: 'Targeted revision', detail: `${weakArea} deep drill`, time: '30 min' },
-    { title: 'Mock test', detail: 'Full reasoning review', time: '45 min' },
-    { title: 'Concept recap', detail: `${strongArea} summaries`, time: '25 min' },
-  ];
-
-  const subjectProgress = [
-    { subject: 'Quant', progress: Math.max(55, Math.min(96, averagePercentage + 6)), trend: `${attempts.length ? '+8%' : '+12%'}` },
-    { subject: 'Reasoning', progress: Math.max(60, Math.min(99, averagePercentage + 10)), trend: `${attempts.length ? '+10%' : '+16%'}` },
-    { subject: 'English', progress: Math.max(50, Math.min(95, averagePercentage - 3)), trend: `${attempts.length ? '+6%' : '+8%'}` },
-    { subject: 'Polity', progress: Math.max(52, Math.min(97, averagePercentage + 4)), trend: `${attempts.length ? '+8%' : '+10%'}` },
-  ];
-
-  const focusAreas = topicMastery.length > 0
-    ? topicMastery.slice(0, 4).map((item) => item.topic)
-    : [weakArea, 'Arithmetic', 'Data Interpretation', 'Current Affairs'];
-  const generatedPlan = buildWeeklyStudyPlan(weakArea, strongArea);
+    : null;
+  const weakestTopic = [...topicMastery].sort((left, right) => left.accuracy - right.accuracy)[0];
+  const strongestTopic = [...topicMastery].sort((left, right) => right.accuracy - left.accuracy)[0];
+  const weakArea = weakestTopic?.topic ?? attempts[0]?.weaknesses.split(', ').find(Boolean) ?? 'Not enough attempt data';
+  const strongArea = strongestTopic?.topic ?? 'Not enough attempt data';
   const savedPlan = getStudyPlansByUser(database, user.id);
-
-  if (savedPlan.length === 0) {
-    for (const item of generatedPlan) {
-      saveStudyPlan(database, {
-        userId: user.id,
-        day: item.day,
-        title: item.title,
-        detail: item.detail,
-        durationMinutes: item.durationMinutes,
-      });
-    }
-  }
-
-  const finalPlan = savedPlan.length > 0
-    ? savedPlan.map((item) => ({
-        title: item.title,
-        detail: item.detail,
-        time: `${item.durationMinutes} min`,
-      }))
-    : generatedPlan.map((item) => ({
-        title: item.title,
-        detail: item.detail,
-        time: `${item.durationMinutes} min`,
-      }));
+  const recentTrend = attempts.slice(0, 7).map((attempt) => attempt.percentage).reverse();
+  const subjectProgress = topicMastery.map((item) => ({
+    subject: item.topic,
+    progress: item.mastery,
+    trend: `${item.attempts} attempt${item.attempts === 1 ? '' : 's'}`,
+  }));
+  const focusAreas = [...topicMastery]
+    .sort((left, right) => left.accuracy - right.accuracy)
+    .slice(0, 4)
+    .map((item) => item.topic);
 
   res.json({
     studentName: user.name,
     examTarget: studentProfile.examTarget,
-    readiness,
-    predictedScore: Math.min(100, Math.max(0, Math.round((averagePercentage + readiness) / 2))),
-    successProbability,
-    streakDays: Math.max(5, attempts.length * 3 + 7),
-    averageAccuracy,
-    weeklyStudyHours: Number(studentProfile.preferredStudyHours ?? weeklyStudyHours),
+    readiness: averagePercentage,
+    predictedScore: null,
+    successProbability: null,
+    streakDays: null,
+    averageAccuracy: averagePercentage,
+    weeklyStudyHours: null,
     weakArea,
     strongArea,
-    nextBestAction: `Revise ${weakArea} with a 30-minute focused drill and two quick recap sets.`,
-    upcomingPlan: finalPlan,
+    nextBestAction: weakestTopic
+      ? `Revise ${weakestTopic.topic} using your saved mistakes, then take a focused practice set.`
+      : attempts.length
+        ? 'Complete more topic-tagged questions to identify a reliable weak area.'
+        : 'Take your first practice or mock test to build a personalized study snapshot.',
+    upcomingPlan: savedPlan.map((item) => ({
+      title: item.title,
+      detail: item.detail,
+      time: `${item.durationMinutes} min`,
+    })),
     subjectProgress,
-    weeklyTrend: normalizedTrend,
+    weeklyTrend: recentTrend,
     focusAreas,
     recentAttempts: attempts.map((attempt) => ({
       id: attempt.id,
@@ -630,84 +795,266 @@ app.get('/api/student/dashboard', authMiddleware, (req, res) => {
   });
 });
 
-app.get('/api/mock-test', authMiddleware, (_req, res) => {
-  res.json(mockQuestionSet);
+app.get('/api/mock-test/categories', authMiddleware, (_req, res) => {
+  res.json(questionCategories);
 });
 
-app.post('/api/mock-test/submit', authMiddleware, (req, res) => {
-  const submittedAnswers = req.body?.answers ?? {};
-  const totalQuestions = mockQuestionSet.length;
-  let correctCount = 0;
+app.get('/api/mock-test/history', authMiddleware, (req, res) => {
+  const userId = (req as any).user.id as string;
+  res.json({
+    attempts: getMockTestAttemptsByUser(database, userId),
+    results: getMockTestAttemptResults(database, userId),
+  });
+});
 
-  for (const question of mockQuestionSet) {
-    if (String(submittedAnswers[question.id] ?? '') === question.correctAnswer) {
-      correctCount += 1;
+app.get('/api/revision/mistakes', authMiddleware, (req, res) => {
+  const userId = (req as any).user.id as string;
+  res.json({ mistakes: getRevisionMistakesByUser(database, userId) });
+});
+
+app.patch('/api/revision/mistakes/:attemptId/:questionId', authMiddleware, (req, res) => {
+  const attemptId = Number(req.params.attemptId);
+  const questionId = req.params.questionId;
+  const { reviewed } = req.body ?? {};
+  if (!Number.isSafeInteger(attemptId) || attemptId < 1 || !questionId || typeof reviewed !== 'boolean') {
+    res.status(400).json({ message: 'A valid attempt, question, and reviewed status are required.' });
+    return;
+  }
+  const userId = (req as any).user.id as string;
+  if (!updateRevisionMistakeState(database, userId, attemptId, questionId, { reviewed })) {
+    res.status(404).json({ message: 'That saved mistake could not be found.' });
+    return;
+  }
+  res.json({ reviewed });
+});
+
+app.delete('/api/revision/mistakes/:attemptId/:questionId', authMiddleware, (req, res) => {
+  const attemptId = Number(req.params.attemptId);
+  const questionId = req.params.questionId;
+  if (!Number.isSafeInteger(attemptId) || attemptId < 1 || !questionId) {
+    res.status(400).json({ message: 'A valid attempt and question are required.' });
+    return;
+  }
+  const userId = (req as any).user.id as string;
+  if (!updateRevisionMistakeState(database, userId, attemptId, questionId, { dismissed: true })) {
+    res.status(404).json({ message: 'That saved mistake could not be found.' });
+    return;
+  }
+  res.status(204).end();
+});
+
+app.get('/api/mock-test', authMiddleware, (req, res) => {
+  const category = typeof req.query.category === 'string' ? req.query.category : 'Mixed';
+  const difficulty = typeof req.query.difficulty === 'string' ? req.query.difficulty : '';
+  const count = Number(req.query.count ?? 10);
+  const durationMinutes = Number(req.query.durationMinutes ?? Math.ceil(count * 1.5));
+  const adaptive = req.query.adaptive === 'true';
+
+  if (category !== 'Mixed' && !questionCategories.includes(category)) {
+    res.status(400).json({ message: 'Choose a supported mock-test category.' });
+    return;
+  }
+  if (difficulty && !['Beginner', 'Intermediate', 'Advanced'].includes(difficulty)) {
+    res.status(400).json({ message: 'Difficulty must be Beginner, Intermediate, or Advanced.' });
+    return;
+  }
+  if (!Number.isInteger(count) || count < 1 || count > 50) {
+    res.status(400).json({ message: 'Question count must be between 1 and 50.' });
+    return;
+  }
+  if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 180) {
+    res.status(400).json({ message: 'Test duration must be between 1 and 180 minutes.' });
+    return;
+  }
+
+  const pool = getMockTestQuestions(database, {
+    category: category === 'Mixed' ? undefined : category,
+    difficulty: difficulty || undefined,
+  });
+  if (pool.length === 0) {
+    res.status(404).json({ message: 'No questions match these filters. Choose another category or difficulty.' });
+    return;
+  }
+
+  const userId = (req as any).user.id as string;
+  const weakTopics = adaptive
+    ? (getMockTestAttemptResults(database, userId)[0] as { weakTopics?: string[] } | undefined)?.weakTopics ?? []
+    : [];
+  const shuffled = [...pool];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
+  }
+  const ordered = adaptive
+    ? [...shuffled.filter((question) => weakTopics.includes(question.topic)), ...shuffled.filter((question) => !weakTopics.includes(question.topic))]
+    : shuffled;
+  const selected = ordered.slice(0, count);
+  if (req.query.mode === 'practice') {
+    res.json(selected);
+    return;
+  }
+  const questions = selected.map(({ correctAnswer: _answer, explanation: _explanation, ...question }) => question);
+  res.json({
+    category,
+    difficulty: difficulty || 'Mixed',
+    questions,
+    availableCount: pool.length,
+    durationSeconds: durationMinutes * 60,
+    adaptive: adaptive && weakTopics.length > 0,
+  });
+});
+
+app.post('/api/mock-test/submit', authMiddleware, async (req, res) => {
+  const { answers, questionIds, category, difficulty, timeTakenSeconds } = req.body ?? {};
+  if (!Array.isArray(questionIds) || questionIds.length < 1 || questionIds.length > 50
+    || questionIds.some((id: unknown) => typeof id !== 'string')
+    || new Set(questionIds).size !== questionIds.length
+    || !answers || typeof answers !== 'object' || Array.isArray(answers)) {
+    res.status(400).json({ message: 'Submit a valid test with its question IDs and selected answers.' });
+    return;
+  }
+
+  const questions = getMockTestQuestions(database, { questionIds });
+  if (questions.length !== questionIds.length) {
+    res.status(400).json({ message: 'One or more submitted questions are invalid.' });
+    return;
+  }
+  for (const [questionId, answer] of Object.entries(answers)) {
+    const question = questions.find((item) => item.id === questionId);
+    if (!question || typeof answer !== 'string' || !question.options.includes(answer)) {
+      res.status(400).json({ message: 'An answer is invalid or does not belong to this test.' });
+      return;
     }
   }
 
-  const percentage = Math.round((correctCount / totalQuestions) * 100);
-  const verdict = percentage >= 80 ? 'Excellent' : percentage >= 60 ? 'Strong' : percentage >= 40 ? 'Developing' : 'Weak';
-
-  const weakTopics = mockQuestionSet
-    .filter((question) => String(submittedAnswers[question.id] ?? '') !== question.correctAnswer)
-    .map((question) => question.category)
-    .slice(0, 3);
-
+  const review = questions.map((question) => {
+    const userAnswer = (answers as Record<string, string>)[question.id] ?? null;
+    const isCorrect = userAnswer === question.correctAnswer;
+    return { ...question, userAnswer, isCorrect, marksAwarded: isCorrect ? question.marks : 0 };
+  });
+  const score = review.reduce((total, question) => total + question.marksAwarded, 0);
+  const total = review.reduce((sum, question) => sum + question.marks, 0);
+  const correctCount = review.filter((question) => question.isCorrect).length;
+  const incorrectCount = review.filter((question) => question.userAnswer !== null && !question.isCorrect).length;
+  const unansweredCount = review.length - correctCount - incorrectCount;
+  const percentage = Math.round((score / total) * 100);
+  const verdict = percentage >= 80 ? 'Excellent' : percentage >= 60 ? 'Strong' : percentage >= 40 ? 'Developing' : 'Needs practice';
+  const byTopic = new Map<string, { correct: number; total: number; category: string }>();
+  for (const question of review) {
+    const current = byTopic.get(question.topic) ?? { correct: 0, total: 0, category: question.category };
+    current.total += 1;
+    if (question.isCorrect) current.correct += 1;
+    byTopic.set(question.topic, current);
+  }
+  const topicPerformance = [...byTopic].map(([topic, stats]) => ({
+    topic,
+    category: stats.category,
+    correct: stats.correct,
+    total: stats.total,
+    percentage: Math.round((stats.correct / stats.total) * 100),
+  }));
+  const categoryPerformance = [...new Set(review.map((question) => question.category))].map((name) => {
+    const categoryQuestions = review.filter((question) => question.category === name);
+    const correct = categoryQuestions.filter((question) => question.isCorrect).length;
+    return { category: name, correct, total: categoryQuestions.length, percentage: Math.round((correct / categoryQuestions.length) * 100) };
+  });
+  const weakTopics = topicPerformance
+    .filter((topic) => topic.percentage < 60)
+    .sort((a, b) => a.percentage - b.percentage)
+    .map((topic) => topic.topic);
   const recommendations = weakTopics.length
-    ? weakTopics.map((topic) => ({
+    ? weakTopics.slice(0, 3).map((topic) => ({
         topic,
-        action: `Revise ${topic} with a focused 25-minute practice block and a quick recap of the key formulas.`,
+        action: `Review the explanations for ${topic}, then take a focused practice test on this topic.`,
         priority: 'High',
       }))
-    : [
-        {
-          topic: 'General Revision',
-          action: 'Maintain momentum by revising your strongest area and targeting a consistent daily practice routine.',
-          priority: 'Medium',
-        },
-      ];
-
-  const userId = (req as any).user?.id as string | undefined;
-  const topicPerformance = new Map<string, { correct: number; total: number }>();
-
-  for (const question of mockQuestionSet) {
-    const current = topicPerformance.get(question.category) ?? { correct: 0, total: 0 };
-    current.total += 1;
-    if (String(submittedAnswers[question.id] ?? '') === question.correctAnswer) {
-      current.correct += 1;
-    }
-    topicPerformance.set(question.category, current);
+    : [{ topic: 'Mixed practice', action: 'Strong work. Try a harder mixed test to keep building accuracy.', priority: 'Medium' }];
+  const elapsed = Number.isInteger(timeTakenSeconds) && timeTakenSeconds >= 0
+    ? Math.min(timeTakenSeconds, 24 * 60 * 60)
+    : 0;
+  const userId = (req as any).user.id as string;
+  const results = {
+    score,
+    total,
+    percentage,
+    verdict,
+    correctCount,
+    incorrectCount,
+    unansweredCount,
+    timeTakenSeconds: elapsed,
+    weakTopics,
+    topicPerformance,
+    categoryPerformance,
+    recommendations,
+    nextBestAction: recommendations[0]?.action ?? 'Keep your daily revision streak going.',
+    review,
+  };
+  let performanceAnalysis = {
+    source: 'rule-based fallback',
+    classification: verdict,
+    note: 'The ML analysis service is unavailable; analysis is based on this test’s actual answers.',
+  };
+  try {
+    const classificationResponse = await fetch(`${mlServiceUrl}/classify-performance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(1500),
+      body: JSON.stringify({
+        studyHours: 0,
+        averageScore: percentage,
+        accuracy: percentage,
+        attemptRate: 100,
+        averageTime: review.length ? elapsed / review.length : 0,
+        revisionFrequency: 0,
+        mockTestCount: 1,
+        topicCoverage: Math.round((new Set(review.map((question) => question.category)).size / questionCategories.length) * 100),
+        consistency: percentage,
+        difficultyPerformance: percentage,
+      }),
+    });
+    if (!classificationResponse.ok) throw new Error(`ML service returned ${classificationResponse.status}.`);
+    const classification = await classificationResponse.json() as { classification?: string };
+    if (!classification.classification) throw new Error('ML service returned no classification.');
+    performanceAnalysis = {
+      source: 'ExamIQ ML service',
+      classification: classification.classification,
+      note: 'Performance classification is based on this test’s actual score and topic coverage.',
+    };
+  } catch (error) {
+    console.warn('Mock-test ML analysis unavailable; using rule-based analysis.', error);
   }
+  const attemptId = saveMockTestAttempt(database, {
+    userId,
+    category: typeof category === 'string' ? category : 'Mixed',
+    difficulty: typeof difficulty === 'string' ? difficulty : 'Mixed',
+    score,
+    total,
+    percentage,
+    correctCount,
+    incorrectCount,
+    unansweredCount,
+    timeTakenSeconds: elapsed,
+    resultJson: JSON.stringify({ ...results, performanceAnalysis }),
+  });
 
-  for (const [topic, stats] of topicPerformance.entries()) {
-    const mastery = Math.round((stats.correct / stats.total) * 100);
+  for (const topic of topicPerformance) {
     upsertTopicMastery(database, {
-      userId: userId ?? 'anonymous',
-      topic,
-      mastery,
+      userId,
+      topic: topic.topic,
+      mastery: topic.percentage,
       attempts: 1,
-      accuracy: mastery,
+      accuracy: topic.percentage,
     });
   }
-
   savePracticeAttempt(database, {
-    userId: userId ?? 'anonymous',
+    userId,
     score: correctCount,
-    total: totalQuestions,
+    total: review.length,
     percentage,
     verdict,
     weaknesses: weakTopics.join(', '),
   });
-
-  res.json({
-    score: correctCount,
-    total: totalQuestions,
-    percentage,
-    verdict,
-    weakTopics,
-    recommendations,
-    nextBestAction: recommendations[0]?.action ?? 'Keep your daily revision streak going.',
-  });
+  res.status(201).json({ ...results, performanceAnalysis, attemptId });
 });
 
 app.get('/api/dashboard', (_req, res) => {

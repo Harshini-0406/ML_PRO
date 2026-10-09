@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import MockTestRunner from './MockTestRunner'
+import RevisionToolPage from './RevisionTools'
+import { apiFetch } from './api'
 import type { ChangeEvent, FormEvent } from 'react'
 import {
   ArrowRight,
@@ -17,24 +20,14 @@ import {
   Target,
   TrendingUp,
   Trophy,
-  Zap,
 } from 'lucide-react'
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   Line,
   LineChart,
   Pie,
   PieChart,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -55,12 +48,12 @@ type AnalysisResponse = {
 type DashboardResponse = {
   studentName: string
   examTarget: string
-  readiness: number
-  predictedScore: number
-  successProbability: number
-  streakDays: number
-  averageAccuracy: number
-  weeklyStudyHours: number
+  readiness: number | null
+  predictedScore: number | null
+  successProbability: number | null
+  streakDays: number | null
+  averageAccuracy: number | null
+  weeklyStudyHours: number | null
   weakArea: string
   strongArea: string
   nextBestAction: string
@@ -96,12 +89,16 @@ type DashboardResponse = {
 type MockQuestion = {
   id: string
   category: string
+  topic: string
   difficulty: string
   prompt: string
   options: string[]
-  correctAnswer: string
-  explanation: string
+  correctAnswer?: string
+  explanation?: string
+  marks: number
 }
+
+type MockTestConfig = { category: string; difficulty: string; count: number; durationMinutes: number; adaptive: boolean }
 
 type SessionState = {
   token: string
@@ -113,7 +110,38 @@ type SessionState = {
   }
 }
 
+type MockAttemptSummary = {
+  id: number
+  category: string
+  difficulty: string
+  score: number
+  total: number
+  percentage: number
+  correctCount: number
+  incorrectCount: number
+  unansweredCount: number
+  timeTakenSeconds: number
+  createdAt: string
+}
+type TopicPerformance = { topic: string; category: string; correct: number; total: number; percentage: number }
+type MockAttemptResult = {
+  id: number
+  topicPerformance?: TopicPerformance[]
+  performanceAnalysis?: { source: string; classification: string; note: string }
+}
+
+const loadMockTestHistory = async (token: string, signal?: AbortSignal) => {
+  const response = await apiFetch('/api/mock-test/history', {
+    signal,
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const data = await response.json() as { attempts?: MockAttemptSummary[]; results?: MockAttemptResult[]; message?: string }
+  if (!response.ok) throw new Error(data.message ?? `Test history request failed (${response.status}).`)
+  return { attempts: data.attempts ?? [], results: data.results ?? [] }
+}
+
 const SESSION_KEY = 'examiq_session'
+
 
 const defaultAnalysis: AnalysisResponse = {
   readiness: 82,
@@ -127,30 +155,29 @@ const defaultAnalysis: AnalysisResponse = {
 }
 
 const defaultDashboard: DashboardResponse = {
-  studentName: 'Aarav Sharma',
+  studentName: 'Student',
+  examTarget: 'Set your exam target in Profile',
+  readiness: null,
+  predictedScore: null,
+  successProbability: null,
+  streakDays: null,
+  averageAccuracy: null,
+  weeklyStudyHours: null,
+  weakArea: 'Take a test to identify focus areas',
+  strongArea: 'No topic data yet',
+  nextBestAction: 'Complete a practice or mock test to build your learning snapshot.',
+  upcomingPlan: [],
+  subjectProgress: [],
+  weeklyTrend: [],
+  focusAreas: [],
+}
+
+const defaultProfile = {
   examTarget: 'UPSC CSE 2027',
-  readiness: 82,
-  predictedScore: 86,
-  successProbability: 91,
-  streakDays: 12,
-  averageAccuracy: 78,
-  weeklyStudyHours: 18.5,
-  weakArea: 'Quantitative Aptitude',
-  strongArea: 'Logical Reasoning',
-  nextBestAction: 'Practice Probability and arithmetic drills for 30 minutes today.',
-  upcomingPlan: [
-    { title: 'Quant revision', detail: 'Probability + arithmetic', time: '30 min' },
-    { title: 'Mock test', detail: 'Full reasoning set', time: '45 min' },
-    { title: 'Concept recap', detail: 'Polity revision notes', time: '25 min' },
-  ],
-  subjectProgress: [
-    { subject: 'Quant', progress: 78, trend: '+12%' },
-    { subject: 'Reasoning', progress: 88, trend: '+16%' },
-    { subject: 'English', progress: 73, trend: '+8%' },
-    { subject: 'Polity', progress: 81, trend: '+10%' },
-  ],
-  weeklyTrend: [62, 68, 71, 75, 78, 84, 86],
-  focusAreas: ['Probability', 'Arithmetic', 'Data Interpretation', 'Current Affairs'],
+  preferredStudyHours: 18,
+  dailyGoal: 'Quant + reasoning focus',
+  learningStyle: 'Goal-oriented',
+  reminderPreference: 'Evening',
 }
 
 const pipeline = [
@@ -215,45 +242,7 @@ const examCatalog = [
   { slug: 'banking', name: 'Banking', category: 'Government', description: 'Speed and accuracy roadmap for IBPS, SBI, and RBI aspirants.', subjects: ['Quant', 'Reasoning', 'English', 'GK'], difficulty: 'Moderate', duration: '1h', questions: 120, upcoming: 'Aug 2027', accent: 'from-indigo-500 to-blue-500' },
 ]
 
-const leaderboardRows = [
-  { rank: 1, name: 'Aarav S.', score: 978, accuracy: '92%', tests: 18, streak: '21d' },
-  { rank: 2, name: 'Ishita M.', score: 961, accuracy: '90%', tests: 16, streak: '17d' },
-  { rank: 3, name: 'Rohan K.', score: 948, accuracy: '88%', tests: 15, streak: '15d' },
-  { rank: 4, name: 'Harshini', score: 934, accuracy: '86%', tests: 14, streak: '12d' },
-  { rank: 5, name: 'Nisha P.', score: 921, accuracy: '85%', tests: 13, streak: '11d' },
-]
-
-const achievementList = [
-  { title: '7 Day Streak', unlocked: true, detail: 'Daily practice streak maintained' },
-  { title: 'First Mock Test', unlocked: true, detail: 'Completed your first full-length mock test' },
-  { title: '90% Accuracy', unlocked: true, detail: 'Achieved a high-accuracy test readout' },
-  { title: 'Speed Master', unlocked: false, detail: 'Solve 25 questions under time pressure' },
-  { title: '100 Questions', unlocked: false, detail: 'Reach 100 solved questions this week' },
-  { title: 'Consistency Champion', unlocked: false, detail: 'Complete 4 weeks of steady improvement' },
-]
-
-const recommendationItems = [
-  { priority: 'HIGH', title: 'Practice Probability', reason: 'Low accuracy + high time per question in arithmetic sets.', improvement: '+11% accuracy', action: 'Start 20-question drill' },
-  { priority: 'MEDIUM', title: 'Revise DBMS', reason: 'Repeated mistakes on query optimization and normalization.', improvement: '+8% conceptual score', action: 'Review last 3 topics' },
-  { priority: 'LOW', title: 'Advanced Reasoning', reason: 'Strong performance trend with room for confidence building.', improvement: '+5% speed', action: 'Take 15 min puzzle set' },
-]
-
-const learningPath = [
-  { name: 'Arrays', status: 'done' },
-  { name: 'Linked Lists', status: 'done' },
-  { name: 'Stacks', status: 'current' },
-  { name: 'Queues', status: 'locked' },
-  { name: 'Trees', status: 'locked' },
-  { name: 'Graphs', status: 'locked' },
-  { name: 'Dynamic Programming', status: 'locked' },
-]
-
-const notificationItems = [
-  { title: 'Mock test result is ready', detail: 'Your Full-Length Quant Mock has an updated analysis.', time: '2 hours ago' },
-  { title: 'Accuracy improved by 5%', detail: 'Reasoning accuracy jumped from 78% to 83% this week.', time: 'Today' },
-  { title: 'Study goal pending', detail: 'Your probability drill is still incomplete for today.', time: '1 day ago' },
-  { title: 'New recommendation available', detail: 'A new high-priority topic plan has been generated for you.', time: '2 days ago' },
-]
+const learningPathTopics = ['Arrays', 'Linked Lists', 'Stacks', 'Queues', 'Trees', 'Graphs', 'Dynamic Programming']
 
 const learningSubjects = [
   { name: 'Quantitative Aptitude', topics: ['Percentages', 'Profit & Loss', 'Time & Work', 'Probability', 'Permutation & Combination'] },
@@ -265,9 +254,9 @@ const learningSubjects = [
 ]
 
 const pyqBank = [
-  { question: 'A sum of money becomes 1.5 times itself in 4 years at simple interest. What is the rate of interest?', options: ['8%', '10%', '12%', '15%'], answer: '12%', explanation: 'For simple interest, SI = P × R × T / 100. With 1.5P, the interest is 0.5P. So 0.5P = P × R × 4 / 100 => R = 12.5% approximates to 12% in real exam rounding.', year: '2024', exam: 'SSC CGL', subject: 'Quant', topic: 'Simple Interest', difficulty: 'Medium' },
-  { question: 'If 15 workers complete a project in 18 days, how many additional workers are needed to finish in 12 days?', options: ['5', '7', '8', '10'], answer: '8', explanation: 'Total work = 15 × 18 = 270 worker-days. For 12 days, required workers = 270 / 12 = 22.5, so 23 approx. Additional workers = 23 - 15 = 8.', year: '2023', exam: 'RRB', subject: 'Quant', topic: 'Time & Work', difficulty: 'Easy' },
-  { question: 'Choose the word closest in meaning to “tenacious”.', options: ['Weak', 'Flexible', 'Persistent', 'Careless'], answer: 'Persistent', explanation: 'Tenacious means persistent or determined despite difficulties.', year: '2022', exam: 'Banking', subject: 'Verbal', topic: 'Vocabulary', difficulty: 'Easy' },
+  { question: 'A sum of money becomes 1.5 times itself in 4 years at simple interest. What is the rate of interest?', options: ['8%', '10%', '12%', '12.5%'], answer: '12.5%', explanation: 'For simple interest, SI = P × R × T / 100. The interest is 0.5P, so 0.5P = P × R × 4 / 100 and R = 12.5%.', year: 'Sample', exam: 'Practice set', subject: 'Quantitative Aptitude', topic: 'Simple Interest', difficulty: 'Beginner' },
+  { question: 'If 15 workers complete a project in 18 days, how many additional whole workers are needed to finish in 12 days?', options: ['5', '7', '8', '10'], answer: '8', explanation: 'Total work = 15 × 18 = 270 worker-days. At 12 days, 270 ÷ 12 = 22.5, so at least 23 whole workers are required: 23 − 15 = 8 additional workers.', year: 'Sample', exam: 'Practice set', subject: 'Quantitative Aptitude', topic: 'Time and Work', difficulty: 'Intermediate' },
+  { question: 'Choose the word closest in meaning to “tenacious”.', options: ['Weak', 'Flexible', 'Persistent', 'Careless'], answer: 'Persistent', explanation: 'Tenacious means persistent or determined despite difficulties.', year: 'Sample', exam: 'Practice set', subject: 'Verbal Ability and English', topic: 'Vocabulary', difficulty: 'Beginner' },
 ]
 
 const mockExamModes = [
@@ -277,19 +266,22 @@ const mockExamModes = [
   { name: 'Weak Area Mock', duration: '30 min', pattern: 'Targeted error recovery', level: 'Adaptive' },
 ]
 
-const revisionCards = [
-  { title: 'Formula Book', detail: 'Quick formulas for arithmetic, probability, ratios, and algebra.', badge: '12 formulas' },
-  { title: 'Flashcards', detail: 'Active recall cards built around current-affairs and reasoning patterns.', badge: '48 cards' },
-  { title: 'Mistake Book', detail: 'Repeated errors are tracked and suggested for review cycles.', badge: '26 errors' },
-  { title: 'Shortcuts & Tricks', detail: 'Speed math tricks and elimination techniques for high-scoring questions.', badge: '9 shortcuts' },
+const questionCategoryNames = [
+  'Quantitative Aptitude',
+  'Logical Reasoning',
+  'Verbal Ability and English',
+  'Data Structures and Algorithms',
+  'Programming and Coding',
+  'Computer Science Fundamentals',
+  'General Knowledge and Current Affairs',
+  'Placement Preparation',
 ]
 
-const studyPlanDay = [
-  { type: 'Quantitative Aptitude', slot: '30 min', task: 'Percentages + Profit & Loss' },
-  { type: 'Logical Reasoning', slot: '25 min', task: 'Syllogism practice set' },
-  { type: 'Current Affairs', slot: '20 min', task: 'Monthly revision capsule' },
-  { type: 'Revision', slot: '15 min', task: 'Formula recall drills' },
-  { type: 'Sectional Test', slot: '45 min', task: 'Reasoning mock section' },
+const revisionCards = [
+  { title: 'Formula Book', detail: 'Learn essential formulas with explanations and worked examples across 14 aptitude topics.', badge: '28 worked formulas', path: '/revision/formulas' },
+  { title: 'Flashcards', detail: 'Practice active recall across aptitude, reasoning, English, core computing, and general knowledge.', badge: '27 study cards', path: '/revision/flashcards' },
+  { title: 'Mistake Book', detail: 'Review incorrect answers saved from your mock tests and practice sessions.', badge: 'From your attempts', path: '/revision/mistakes' },
+  { title: 'Shortcuts & Tricks', detail: 'Build speed with practical calculation, reasoning, coding, and exam strategies.', badge: '10 worked strategies', path: '/revision/shortcuts' },
 ]
 
 const getStoredSession = (): SessionState | null => {
@@ -351,7 +343,10 @@ function PageLayout({ title, subtitle, actions, children }: { title: string; sub
 }
 
 function OnboardingPage() {
+  const navigate = useNavigate()
   const [step, setStep] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState({
     exam: 'UPSC CSE',
     level: 'Advanced',
@@ -399,6 +394,39 @@ function OnboardingPage() {
   }
 
   const isLastStep = step === steps.length - 1
+  const continueSetup = async () => {
+    if (!isLastStep) {
+      setStep((prev) => Math.min(prev + 1, steps.length - 1))
+      return
+    }
+    const session = getStoredSession()
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const response = await apiFetch('/api/student/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({
+          examTarget: form.exam,
+          preferredStudyHours: Math.min(80, Math.round((Number.parseFloat(form.hours) || 1) * 7)),
+          dailyGoal: `Focus: ${form.weakSubjects.join(', ') || 'mixed practice'}; target score: ${form.targetScore}/100`,
+          learningStyle: 'Goal-oriented',
+          reminderPreference: 'Evening',
+        }),
+      })
+      const data = await response.json() as { message?: string }
+      if (!response.ok) throw new Error(data.message ?? 'Could not save your preparation profile.')
+      navigate('/dashboard', { replace: true })
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save your preparation profile.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <PageLayout
@@ -462,18 +490,14 @@ function OnboardingPage() {
 
             <button
               type="button"
-              onClick={() => {
-                if (isLastStep) {
-                  setStep(steps.length - 1)
-                  return
-                }
-                setStep((prev) => Math.min(prev + 1, steps.length - 1))
-              }}
+              onClick={() => void continueSetup()}
+              disabled={saving}
               className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950"
             >
-              {isLastStep ? 'Finish setup' : 'Continue'}
+              {saving ? 'Saving…' : isLastStep ? 'Finish setup' : 'Continue'}
             </button>
           </div>
+          {error && <p role="alert" className="mt-4 text-sm text-rose-200">{error}</p>}
         </div>
 
         <div className="rounded-[30px] border border-violet-500/30 bg-gradient-to-br from-violet-500/10 via-slate-900 to-cyan-500/10 p-6">
@@ -497,8 +521,8 @@ function OnboardingPage() {
               <div className="mt-1 text-xl font-bold text-white">{form.targetScore} / 100</div>
             </div>
             <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-              <div className="text-sm text-slate-400">Initial readiness score</div>
-              <div className="mt-1 text-xl font-bold text-white">82%</div>
+              <div className="text-sm text-slate-400">Readiness score</div>
+              <div className="mt-1 text-xl font-bold text-white">Available after your first test</div>
             </div>
           </div>
         </div>
@@ -597,74 +621,210 @@ function ExamsPage() {
   )
 }
 
-function AnalyticsPage() {
-  const trendData = [
-    { name: 'Mon', score: 68, accuracy: 76, hours: 2.4 },
-    { name: 'Tue', score: 72, accuracy: 78, hours: 2.9 },
-    { name: 'Wed', score: 77, accuracy: 80, hours: 3.1 },
-    { name: 'Thu', score: 81, accuracy: 83, hours: 3.8 },
-    { name: 'Fri', score: 84, accuracy: 86, hours: 4.1 },
-    { name: 'Sat', score: 88, accuracy: 88, hours: 4.5 },
-    { name: 'Sun', score: 91, accuracy: 90, hours: 4.8 },
-  ]
+function ExamDetailsPage() {
+  const { slug = '' } = useParams()
+  const [exam, setExam] = useState<(typeof examCatalog)[number] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
 
-  const subjectBreakdown = [
-    { name: 'Quant', value: 32 },
-    { name: 'Reasoning', value: 26 },
-    { name: 'English', value: 18 },
-    { name: 'Polity', value: 24 },
-  ]
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true)
+    apiFetch(`/api/exams/${encodeURIComponent(slug)}`, { signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json() as (typeof examCatalog)[number] & { message?: string }
+        if (!response.ok) throw new Error(data.message ?? `Exam request failed (${response.status}).`)
+        setExam(data)
+        setError(null)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [retryCount, slug])
+
+  if (loading) return <PageLayout title="Loading exam…" subtitle="Retrieving exam information."><p className="mt-6 text-sm text-slate-400">Loading exam details…</p></PageLayout>
+  if (error || !exam) {
+    return <PageLayout title="Exam information unavailable" subtitle={error ?? 'This exam was not found.'} actions={<Link to="/exams" className="rounded-full border border-slate-600 px-4 py-2 text-slate-200">Back to exams</Link>}>
+      {error && <button type="button" onClick={() => setRetryCount((value) => value + 1)} className="mt-6 rounded-full bg-violet-500 px-5 py-3 font-semibold text-white">Retry</button>}
+    </PageLayout>
+  }
+
+  return <PageLayout title={exam.name} subtitle={exam.description} actions={<Link to="/exams" className="rounded-full border border-slate-600 px-4 py-2 text-slate-200">Back to exams</Link>}>
+    <div className="mt-8 grid gap-5 md:grid-cols-2">
+      <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
+        <p className="text-xs uppercase tracking-[0.2em] text-violet-300">Exam overview</p>
+        <h2 className="mt-3 text-2xl font-bold text-white">Preparation outline</h2>
+        <p className="mt-3 text-sm leading-6 text-slate-300">This catalog entry is general preparation guidance. Confirm exam dates, eligibility, syllabus, and official pattern with the exam authority.</p>
+        <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><dt className="text-slate-400">Category</dt><dd className="mt-1 text-white">{exam.category}</dd></div>
+          <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><dt className="text-slate-400">Difficulty</dt><dd className="mt-1 text-white">{exam.difficulty}</dd></div>
+          <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><dt className="text-slate-400">Typical duration</dt><dd className="mt-1 text-white">{exam.duration}</dd></div>
+          <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><dt className="text-slate-400">Catalog question count</dt><dd className="mt-1 text-white">{exam.questions}</dd></div>
+        </dl>
+      </div>
+      <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
+        <h2 className="text-2xl font-bold text-white">Subjects to prepare</h2>
+        <div className="mt-5 flex flex-wrap gap-2">{exam.subjects.map((subject) => <span key={subject} className="rounded-full border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">{subject}</span>)}</div>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link to="/learn" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Browse learning topics</Link>
+          <Link to="/practice" className="rounded-full border border-slate-600 px-5 py-3 font-semibold text-slate-200">Start practice</Link>
+        </div>
+      </div>
+    </div>
+  </PageLayout>
+}
+
+function NotFoundPage() {
+  const destination = getStoredSession() ? '/dashboard' : '/'
+  return <PageLayout title="Page not found" subtitle="That ExamIQ page does not exist or may have moved." actions={<Link to={destination} className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">{destination === '/' ? 'Go home' : 'Return to dashboard'}</Link>}>
+    <p className="mt-6 text-sm text-slate-400">Check the address or use the navigation to continue.</p>
+  </PageLayout>
+}
+
+function AnalyticsPage() {
+  type Attempt = {
+    id: number
+    category: string
+    difficulty: string
+    score: number
+    total: number
+    percentage: number
+    correctCount: number
+    incorrectCount: number
+    unansweredCount: number
+    timeTakenSeconds: number
+    createdAt: string
+  }
+  type TopicStat = { topic: string; category: string; correct: number; total: number; percentage: number }
+  type SavedResult = { id: number; topicPerformance?: TopicStat[] }
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [attempts, setAttempts] = useState<Attempt[]>([])
+  const [results, setResults] = useState<SavedResult[]>([])
+  const [range, setRange] = useState('30 days')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    apiFetch('/api/mock-test/history', {
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then(async (response) => {
+        const data = await response.json() as { attempts?: Attempt[]; results?: SavedResult[]; message?: string }
+        if (!response.ok) throw new Error(data.message ?? `Analytics request failed (${response.status}).`)
+        setAttempts(data.attempts ?? [])
+        setResults(data.results ?? [])
+        setError(null)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+
+  const filteredAttempts = useMemo(() => {
+    if (range === 'All time') return attempts
+    const days = Number.parseInt(range, 10)
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - days)
+    return attempts.filter((attempt) => new Date(attempt.createdAt.replace(' ', 'T') + 'Z') >= cutoff)
+  }, [attempts, range])
+  const totalAnswered = filteredAttempts.reduce((sum, attempt) => sum + attempt.correctCount + attempt.incorrectCount, 0)
+  const totalCorrect = filteredAttempts.reduce((sum, attempt) => sum + attempt.correctCount, 0)
+  const averageScore = filteredAttempts.length
+    ? Math.round(filteredAttempts.reduce((sum, attempt) => sum + attempt.percentage, 0) / filteredAttempts.length)
+    : null
+  const totalTimeMinutes = Math.round(filteredAttempts.reduce((sum, attempt) => sum + attempt.timeTakenSeconds, 0) / 60)
+  const trendData = [...filteredAttempts].reverse().map((attempt) => ({
+    name: new Date(attempt.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    score: attempt.percentage,
+    accuracy: attempt.total ? Math.round((attempt.correctCount / attempt.total) * 100) : 0,
+  }))
+  const categoryMap = new Map<string, number>()
+  for (const attempt of filteredAttempts) categoryMap.set(attempt.category, (categoryMap.get(attempt.category) ?? 0) + attempt.total)
+  const subjectBreakdown = [...categoryMap].map(([name, value]) => ({ name, value }))
+  const visibleIds = new Set(filteredAttempts.map((attempt) => attempt.id))
+  const topicStats = new Map<string, { category: string; correct: number; total: number }>()
+  for (const result of results.filter((item) => visibleIds.has(item.id))) {
+    for (const topic of result.topicPerformance ?? []) {
+      const stats = topicStats.get(topic.topic) ?? { category: topic.category, correct: 0, total: 0 }
+      stats.correct += topic.correct
+      stats.total += topic.total
+      topicStats.set(topic.topic, stats)
+    }
+  }
+  const weakTopics = [...topicStats].map(([topic, stats]) => ({
+    topic,
+    category: stats.category,
+    accuracy: stats.total ? Math.round((stats.correct / stats.total) * 100) : 0,
+    attempts: stats.total,
+  })).sort((left, right) => left.accuracy - right.accuracy)
 
   return (
     <PageLayout
       title="Analytics Dashboard"
-      subtitle="Track your readiness with performance trends, subject strength, time efficiency, and consistency across your prep cycle."
+      subtitle="Explore performance from your saved mock-test attempts. Untracked study hours and unsupported predictions are not estimated."
       actions={
         <div className="flex gap-2 text-xs font-medium text-slate-300">
-          {['7 days', '30 days', '90 days', 'All time'].map((range) => (
-            <button key={range} type="button" className="rounded-full border border-slate-600 px-3 py-2 hover:border-violet-400 hover:text-white">
-              {range}
+          {['7 days', '30 days', '90 days', 'All time'].map((option) => (
+            <button key={option} type="button" aria-pressed={range === option} onClick={() => setRange(option)} className={`rounded-full border px-3 py-2 hover:border-violet-400 hover:text-white ${range === option ? 'border-violet-400 text-white' : 'border-slate-600'}`}>
+              {option}
             </button>
           ))}
         </div>
       }
     >
+      {error && <div role="alert" className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><span>Could not load analytics: {error}</span><button type="button" onClick={() => setRetryCount((value) => value + 1)} className="underline">Retry</button></div>}
+      {loading && <p className="mt-6 text-sm text-slate-400">Loading saved test analytics…</p>}
       <div className="mt-8 grid gap-5 md:grid-cols-4">
         {[
-          { label: 'Accuracy', value: '89%', note: '+6.2%' },
-          { label: 'Avg score', value: '86/100', note: 'Best this month' },
-          { label: 'Study hours', value: '24.5h', note: '+3.1h' },
-          { label: 'Consistency', value: '82%', note: 'Stable output' },
+          { label: 'Tests attempted', value: String(filteredAttempts.length), note: range },
+          { label: 'Question accuracy', value: totalAnswered ? `${Math.round((totalCorrect / totalAnswered) * 100)}%` : '—', note: `${totalCorrect}/${totalAnswered} answered correctly` },
+          { label: 'Average test score', value: averageScore === null ? '—' : `${averageScore}%`, note: 'Across saved attempts' },
+          { label: 'Time in tests', value: totalTimeMinutes ? `${totalTimeMinutes} min` : '—', note: 'Study hours are not tracked' },
         ].map((item) => (
           <div key={item.label} className="rounded-[24px] border border-slate-700 bg-slate-900/80 p-5">
             <div className="text-sm text-slate-400">{item.label}</div>
             <div className="mt-3 text-3xl font-black text-white">{item.value}</div>
-            <div className="mt-1 text-xs text-emerald-300">{item.note}</div>
+            <div className="mt-1 text-xs text-slate-400">{item.note}</div>
           </div>
         ))}
       </div>
 
+      {!loading && !error && filteredAttempts.length === 0 && <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 bg-slate-900/50 p-8 text-center text-slate-300">No saved test attempts in this period. Complete a mock test to see your real performance trends.</div>}
       <div className="mt-8 grid gap-6 xl:grid-cols-2">
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-4 text-xl font-bold text-white">Performance trend</div>
+          <div className="mb-4 text-xl font-bold text-white">Score and accuracy by attempt</div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+            {trendData.length ? <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trendData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                 <XAxis dataKey="name" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
+                <YAxis domain={[0, 100]} stroke="#94a3b8" />
                 <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="#8b5cf6" strokeWidth={3} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="accuracy" stroke="#22d3ee" strokeWidth={3} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="score" name="Score %" stroke="#8b5cf6" strokeWidth={3} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="accuracy" name="Accuracy %" stroke="#22d3ee" strokeWidth={3} dot={{ r: 4 }} />
               </LineChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <div className="flex h-full items-center justify-center text-sm text-slate-500">No test data for this period.</div>}
           </div>
         </div>
 
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-4 text-xl font-bold text-white">Subject distribution</div>
+          <div className="mb-4 text-xl font-bold text-white">Questions by test category</div>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+            {subjectBreakdown.length ? <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={subjectBreakdown} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
                   {subjectBreakdown.map((entry, index) => (
@@ -673,40 +833,29 @@ function AnalyticsPage() {
                 </Pie>
                 <Tooltip />
               </PieChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <div className="flex h-full items-center justify-center text-sm text-slate-500">Category data appears after your first test.</div>}
           </div>
         </div>
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-4 text-xl font-bold text-white">Study hours vs performance</div>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="name" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip />
-                <Area type="monotone" dataKey="hours" stroke="#34d399" fill="#34d399" fillOpacity={0.3} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <div className="mb-4 text-xl font-bold text-white">Lowest-performing topics</div>
+          {weakTopics.length ? <div className="space-y-3">{weakTopics.slice(0, 6).map((topic) => (
+            <div key={topic.topic} className="flex items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+              <div><div className="font-semibold text-white">{topic.topic}</div><div className="text-xs text-slate-400">{topic.category} · {topic.attempts} question{topic.attempts === 1 ? '' : 's'}</div></div>
+              <div className="font-bold text-rose-200">{topic.accuracy}%</div>
+            </div>
+          ))}</div> : <p className="text-sm text-slate-400">Topic-level results will appear after a test.</p>}
         </div>
-
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-4 text-xl font-bold text-white">Time management</div>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="name" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip />
-                <Bar dataKey="hours" radius={[8, 8, 0, 0]} fill="#f59e0b" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <h3 className="mb-4 text-xl font-bold text-white">Recent test attempts</h3>
+          {filteredAttempts.length ? <div className="space-y-3">{filteredAttempts.slice(0, 6).map((attempt) => (
+            <div key={attempt.id} className="flex items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+              <div><div className="font-semibold text-white">{attempt.category}</div><div className="text-xs text-slate-400">{new Date(attempt.createdAt.replace(' ', 'T') + 'Z').toLocaleString()} · {attempt.timeTakenSeconds}s</div></div>
+              <div className="text-right"><div className="font-bold text-violet-200">{attempt.percentage}%</div><div className="text-xs text-slate-400">{attempt.correctCount}/{attempt.total} correct</div></div>
+            </div>
+          ))}</div> : <p className="text-sm text-slate-400">No attempts to show.</p>}
         </div>
       </div>
     </PageLayout>
@@ -714,127 +863,204 @@ function AnalyticsPage() {
 }
 
 function PredictionPage() {
-  const radarData = [
-    { subject: 'Accuracy', value: 88 },
-    { subject: 'Consistency', value: 82 },
-    { subject: 'Study Hours', value: 76 },
-    { subject: 'Weak Areas', value: 68 },
-    { subject: 'Speed', value: 72 },
-    { subject: 'Topic Coverage', value: 91 },
-  ]
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [attempts, setAttempts] = useState<MockAttemptSummary[]>([])
+  const [results, setResults] = useState<MockAttemptResult[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  const retryHistory = () => {
+    setLoading(true)
+    setRetryCount((count) => count + 1)
+  }
 
-  const modelCards = [
-    { name: 'Random Forest', purpose: 'Feature-rich classification', type: 'Classification', metric: 'F1 Score: 0.91' },
-    { name: 'XGBoost', purpose: 'Performance ranking and risk scoring', type: 'Regression', metric: 'RMSE: 3.2' },
-    { name: 'Logistic Regression', purpose: 'Probability estimation and readiness bands', type: 'Probability', metric: 'AUC: 0.89' },
-  ]
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    loadMockTestHistory(session.token, controller.signal)
+      .then((history) => {
+        setAttempts(history.attempts)
+        setResults(history.results)
+        setError(null)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+
+  const averageScore = attempts.length
+    ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.percentage, 0) / attempts.length)
+    : null
+  const bestScore = attempts.length ? Math.max(...attempts.map((attempt) => attempt.percentage)) : null
+  const topicSummary = results.flatMap((result) => result.topicPerformance ?? []).reduce<Record<string, { category: string; correct: number; total: number }>>((summary, topic) => {
+    const current = summary[topic.topic] ?? { category: topic.category, correct: 0, total: 0 }
+    current.correct += topic.correct
+    current.total += topic.total
+    summary[topic.topic] = current
+    return summary
+  }, {})
+  const weakTopics = Object.entries(topicSummary)
+    .map(([topic, performance]) => ({ topic, ...performance, percentage: performance.total ? Math.round(performance.correct / performance.total * 100) : 0 }))
+    .filter((topic) => topic.percentage < 70)
+    .sort((a, b) => a.percentage - b.percentage)
+    .slice(0, 5)
+  const latestAnalysis = results[0]?.performanceAnalysis
+  const scoreTrend = [...attempts].reverse().map((attempt, index) => ({
+    test: `Test ${index + 1}`,
+    score: attempt.percentage,
+  }))
 
   return (
     <PageLayout
-      title="AI Prediction"
-      subtitle="Demo / simulated prediction outputs are clearly labeled and ready for a production ML service integration later."
+      title="Performance & AI Insights"
+      subtitle="Insights use your saved mock-test results. Classification identifies its source; recommendations are rule-based when model output is unavailable."
       actions={
-        <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
-          Demo Dataset / Simulated Analytics
+        <div className="flex gap-3">
+          <button type="button" onClick={retryHistory} disabled={loading} className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200 disabled:opacity-50">
+            {loading ? 'Loading…' : 'Retry'}
+          </button>
+          <Link to="/mock-tests" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950">Take a mock test</Link>
         </div>
       }
     >
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.9fr]">
-        <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-violet-300">Prediction output</div>
-              <h3 className="mt-2 text-3xl font-black text-white">86 / 100</h3>
-            </div>
-            <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-sm font-semibold text-emerald-200">High Performer</div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-              <div className="text-sm text-slate-400">Success Probability</div>
-              <div className="mt-2 text-2xl font-black text-white">91%</div>
-            </div>
-            <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-              <div className="text-sm text-slate-400">Risk Level</div>
-              <div className="mt-2 text-2xl font-black text-emerald-300">Low</div>
-            </div>
-          </div>
-
-          <div className="mt-5 h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="#475569" />
-                <PolarAngleAxis dataKey="subject" tick={{ fill: '#cbd5e1', fontSize: 12 }} />
-                <PolarRadiusAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
-                <Radar name="Readiness" dataKey="value" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.5} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
+      {loading ? (
+        <div role="status" className="mt-8 rounded-2xl border border-slate-700 bg-slate-900/70 p-8 text-center text-slate-300">Loading your saved performance…</div>
+      ) : error ? (
+        <div role="alert" className="mt-8 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6 text-rose-100">
+          <p>{error}</p>
+          <button type="button" onClick={retryHistory} className="mt-4 rounded-full border border-rose-300/40 px-4 py-2 text-sm">Retry</button>
         </div>
-
-        <div className="space-y-5">
-          <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-            <div className="text-xl font-bold text-white">Prediction factors</div>
-            <ul className="mt-4 space-y-3 text-sm text-slate-300">
-              {['Previous scores', 'Accuracy', 'Study hours', 'Topic coverage', 'Average solving time', 'Mock test performance'].map((factor) => (
-                <li key={factor} className="flex items-center justify-between rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-2">
-                  <span>{factor}</span>
-                  <span className="font-semibold text-violet-200">Strong</span>
-                </li>
-              ))}
-            </ul>
+      ) : attempts.length === 0 ? (
+        <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 bg-slate-900/60 p-8 text-center">
+          <h2 className="text-xl font-bold text-white">Complete a mock test to get personal insights</h2>
+          <p className="mt-2 text-sm text-slate-300">Scores, topic strengths, weak areas, and classification are based on your saved attempts—there are no sample predictions here.</p>
+          <Link to="/mock-tests" className="mt-5 inline-flex rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Start a mock test</Link>
+        </div>
+      ) : (
+        <>
+          <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            {[
+              { label: 'Average actual score', value: `${averageScore}%` },
+              { label: 'Best actual score', value: `${bestScore}%` },
+              { label: 'Saved attempts analyzed', value: `${attempts.length}` },
+            ].map((metric) => (
+              <div key={metric.label} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-5">
+                <div className="text-sm text-slate-400">{metric.label}</div>
+                <div className="mt-2 text-3xl font-black text-white">{metric.value}</div>
+              </div>
+            ))}
           </div>
 
-          <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-            <div className="text-xl font-bold text-white">Model cards</div>
-            <div className="mt-4 space-y-3">
-              {modelCards.map((model) => (
-                <div key={model.name} className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-lg font-bold text-white">{model.name}</div>
-                    <span className="rounded-full border border-slate-600 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-300">{model.type}</span>
-                  </div>
-                  <div className="mt-2 text-sm text-slate-300">{model.purpose}</div>
-                  <div className="mt-3 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">{model.metric}</div>
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+            <section className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
+              <h2 className="text-xl font-bold text-white">Your score trend</h2>
+              {scoreTrend.length > 1 ? (
+                <div className="mt-4 h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={scoreTrend}>
+                      <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+                      <XAxis dataKey="test" stroke="#94a3b8" />
+                      <YAxis domain={[0, 100]} stroke="#94a3b8" />
+                      <Tooltip />
+                      <Line type="monotone" dataKey="score" name="Score %" stroke="#8b5cf6" strokeWidth={3} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-              ))}
-            </div>
+              ) : <p className="mt-4 text-sm text-slate-300">Complete another test to see a score trend.</p>}
+            </section>
+
+            <section className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
+              <h2 className="text-xl font-bold text-white">Latest performance classification</h2>
+              {latestAnalysis ? (
+                <>
+                  <div className="mt-4 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-sm font-semibold text-violet-200">{latestAnalysis.classification}</div>
+                  <p className="mt-4 text-sm leading-6 text-slate-300">{latestAnalysis.note}</p>
+                  <p className="mt-3 text-xs text-slate-400">Source: {latestAnalysis.source}</p>
+                </>
+              ) : <p className="mt-4 text-sm leading-6 text-slate-300">No model classification was saved for the latest test. Review your results for rule-based topic recommendations.</p>}
+              <h3 className="mt-6 font-semibold text-white">Topics to review</h3>
+              {weakTopics.length ? (
+                <ul className="mt-3 space-y-2">
+                  {weakTopics.map((topic) => <li key={topic.topic} className="flex justify-between rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm"><span className="text-slate-200">{topic.topic} <span className="text-slate-500">· {topic.category}</span></span><span className="font-semibold text-amber-300">{topic.percentage}%</span></li>)}
+                </ul>
+              ) : <p className="mt-2 text-sm text-slate-300">No weak topics identified in the saved topic results so far.</p>}
+              <Link to="/recommendations" className="mt-5 inline-flex text-sm font-semibold text-violet-300">See practice recommendations <ArrowRight className="ml-2 h-4 w-4" /></Link>
+            </section>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </PageLayout>
   )
 }
 
 function RecommendationsPage() {
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [history, setHistory] = useState<{ attempts: MockAttemptSummary[]; results: MockAttemptResult[] }>({ attempts: [], results: [] })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    loadMockTestHistory(session.token, controller.signal)
+      .then((data) => { setHistory(data); setError(null) })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+  const topicTotals = new Map<string, { category: string; correct: number; total: number }>()
+  for (const result of history.results) {
+    for (const topic of result.topicPerformance ?? []) {
+      const existing = topicTotals.get(topic.topic) ?? { category: topic.category, correct: 0, total: 0 }
+      existing.correct += topic.correct
+      existing.total += topic.total
+      topicTotals.set(topic.topic, existing)
+    }
+  }
+  const recommendations = [...topicTotals].map(([topic, totals]) => ({
+    topic,
+    category: totals.category,
+    attempts: totals.total,
+    accuracy: totals.total ? Math.round((totals.correct / totals.total) * 100) : 0,
+  })).sort((left, right) => left.accuracy - right.accuracy).slice(0, 6)
+
   return (
     <PageLayout
       title="Smart Recommendations"
-      subtitle="Adaptive guidance prioritized by urgency, impact, and expected productivity gain."
-      actions={<button type="button" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Generate new plan</button>}
+      subtitle="Rule-based topic recommendations from your saved mock-test results. No unsupported score-improvement claims are made."
+      actions={<Link to="/study-planner" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Plan a study session</Link>}
     >
+      {loading && <p className="mt-6 text-sm text-slate-400">Analyzing your saved attempts…</p>}
+      {error && <div role="alert" className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><span>{error}</span><button type="button" onClick={() => setRetryCount((count) => count + 1)} className="underline">Retry</button></div>}
+      {!loading && !error && recommendations.length === 0 && <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 p-8 text-center text-slate-300">Complete a mock test to receive recommendations based on your actual topic performance. <Link to="/mock-tests" className="ml-1 text-violet-300 underline">Start a test</Link></div>}
       <div className="mt-8 grid gap-5 lg:grid-cols-3">
-        {recommendationItems.map((item) => (
-          <div key={item.title} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-            <div className="flex items-center justify-between">
-              <div className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] ${item.priority === 'HIGH' ? 'bg-rose-500/10 text-rose-200 border border-rose-500/30' : item.priority === 'MEDIUM' ? 'bg-amber-500/10 text-amber-200 border border-amber-500/30' : 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/30'}`}>
-                {item.priority}
-              </div>
-              <Zap className="h-5 w-5 text-violet-300" />
+        {recommendations.map((item, index) => (
+          <article key={item.topic} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
+            <div className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] ${index === 0 ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+              {index === 0 ? 'Priority' : 'Practice'}
             </div>
-
-            <h3 className="mt-5 text-2xl font-black text-white">{item.title}</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-300">{item.reason}</p>
-
-            <div className="mt-5 rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-              <div className="text-sm text-slate-400">Expected improvement</div>
-              <div className="mt-2 text-lg font-bold text-white">{item.improvement}</div>
+            <h3 className="mt-5 text-2xl font-black text-white">{item.topic}</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-300">Your saved answers show {item.accuracy}% accuracy across {item.attempts} question{item.attempts === 1 ? '' : 's'} in {item.category}.</p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link to="/mock-tests" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950">Build a focused test</Link>
+              <Link to="/revision/mistakes" className="rounded-full border border-slate-600 px-4 py-3 text-sm text-slate-200">Review mistakes</Link>
             </div>
-
-            <button type="button" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-4 py-3 font-semibold text-slate-950">
-              {item.action}
-            </button>
-          </div>
+          </article>
         ))}
       </div>
     </PageLayout>
@@ -845,47 +1071,45 @@ function LearningPathPage() {
   return (
     <PageLayout
       title="Learning Path"
-      subtitle="DSA-powered recommendations guide your progress across topics, dependencies, and mastery milestones."
-      actions={<button type="button" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Resume progress</button>}
+      subtitle="A suggested DSA topic sequence. Per-lesson completion is not tracked yet; use your saved test results and Mistake Book to review mastery."
+      actions={<Link to="/learn" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Browse learning topics</Link>}
     >
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
           <div className="flex items-center justify-between">
-            <div className="text-xl font-bold text-white">DSA progression</div>
-            <div className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-violet-200">Priority queue</div>
+            <div className="text-xl font-bold text-white">DSA topic sequence</div>
+            <div className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-violet-200">Suggested order</div>
           </div>
 
           <div className="mt-8 space-y-5">
-            {learningPath.map((item, index) => (
-              <div key={item.name} className="flex items-center gap-4">
-                <div className={`flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold ${item.status === 'done' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : item.status === 'current' ? 'border-violet-500/30 bg-violet-500/10 text-violet-200' : 'border-slate-700 bg-slate-950/70 text-slate-400'}`}>
+            {learningPathTopics.map((topic, index) => (
+              <div key={topic} className="flex items-center gap-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-700 bg-slate-950/70 text-sm font-bold text-slate-300">
                   {index + 1}
                 </div>
                 <div className="flex-1 rounded-2xl border border-slate-700 bg-slate-950/70 px-4 py-3">
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-lg font-semibold text-white">{item.name}</span>
-                    <span className="text-xs uppercase tracking-[0.2em] text-slate-400">{item.status}</span>
+                    <span className="text-lg font-semibold text-white">{topic}</span>
+                    <Link to="/mock-tests" className="text-sm font-semibold text-violet-300 hover:text-white">Practice</Link>
                   </div>
                 </div>
-                {index < learningPath.length - 1 && <ArrowRight className="h-5 w-5 text-slate-500" />}
+                {index < learningPathTopics.length - 1 && <ArrowRight className="h-5 w-5 text-slate-500" />}
               </div>
             ))}
           </div>
         </div>
 
         <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
-          <div className="text-xl font-bold text-white">Current focus</div>
+          <div className="text-xl font-bold text-white">How to continue</div>
           <div className="mt-5 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4">
-            <div className="text-sm text-violet-200">Current topic</div>
-            <div className="mt-2 text-2xl font-black text-white">Stacks</div>
-            <div className="mt-3 text-sm text-slate-300">Master LIFO operations, balanced parentheses, and queue conversion patterns.</div>
+            <div className="text-sm text-violet-200">Suggested starting point</div>
+            <div className="mt-2 text-2xl font-black text-white">Arrays</div>
+            <div className="mt-3 text-sm text-slate-300">Start with array traversal and indexing, then move through linked structures, stacks, trees, and graphs.</div>
+            <Link to="/mock-tests" className="mt-4 inline-flex rounded-full bg-violet-500 px-4 py-2 text-sm font-semibold text-white">Choose a DSA test</Link>
           </div>
           <div className="mt-5 rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-            <div className="text-sm text-slate-400">Progress</div>
-            <div className="mt-2 text-3xl font-black text-white">68%</div>
-            <div className="mt-3 h-2.5 rounded-full bg-slate-800">
-              <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{ width: '68%' }} />
-            </div>
+            <div className="text-sm text-slate-300">To review actual performance, use Analytics or your saved Mistake Book after completing tests.</div>
+            <Link to="/analytics" className="mt-3 inline-flex text-sm font-semibold text-violet-300">Open Analytics <ArrowRight className="ml-2 h-4 w-4" /></Link>
           </div>
         </div>
       </div>
@@ -897,56 +1121,58 @@ function LeaderboardPage() {
   return (
     <PageLayout
       title="Leaderboard"
-      subtitle="Compare your performance against peers across weekly and monthly prep streaks."
-      actions={
-        <div className="flex gap-2">
-          {['Global', 'Weekly', 'Monthly', 'Friends'].map((tab) => (
-            <button key={tab} type="button" className="rounded-full border border-slate-600 px-3 py-2 text-xs font-medium text-slate-200 hover:border-violet-400">
-              {tab}
-            </button>
-          ))}
-        </div>
-      }
+      subtitle="ExamIQ does not publish shared student rankings yet. No peer names or scores are fabricated."
     >
-      <div className="mt-8 overflow-hidden rounded-[28px] border border-slate-700 bg-slate-900/80">
-        <table className="min-w-full text-left text-sm text-slate-200">
-          <thead className="bg-slate-950/80 text-slate-300">
-            <tr>
-              <th className="px-5 py-4">Rank</th>
-              <th className="px-5 py-4">Student</th>
-              <th className="px-5 py-4">Score</th>
-              <th className="px-5 py-4">Accuracy</th>
-              <th className="px-5 py-4">Tests</th>
-              <th className="px-5 py-4">Streak</th>
-            </tr>
-          </thead>
-          <tbody>
-            {leaderboardRows.map((row) => (
-              <tr key={row.name} className={row.name === 'Harshini' ? 'bg-violet-500/10' : 'border-t border-slate-800'}>
-                <td className="px-5 py-4 font-bold text-white">#{row.rank}</td>
-                <td className="px-5 py-4 font-semibold text-white">{row.name}</td>
-                <td className="px-5 py-4">{row.score}</td>
-                <td className="px-5 py-4">{row.accuracy}</td>
-                <td className="px-5 py-4">{row.tests}</td>
-                <td className="px-5 py-4">{row.streak}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 bg-slate-900/60 p-8 text-center">
+        <Trophy className="mx-auto h-10 w-10 text-violet-300" />
+        <h2 className="mt-4 text-xl font-bold text-white">Community rankings are not enabled</h2>
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-300">A privacy-aware leaderboard requires an explicit sharing/opt-in setting. Until that exists, your results remain private to your account.</p>
+        <Link to="/analytics" className="mt-5 inline-flex rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">View my analytics</Link>
       </div>
     </PageLayout>
   )
 }
 
 function AchievementsPage() {
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [attempts, setAttempts] = useState<MockAttemptSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    loadMockTestHistory(session.token, controller.signal)
+      .then((data) => { setAttempts(data.attempts); setError(null) })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+  const totalQuestions = attempts.reduce((sum, attempt) => sum + attempt.total, 0)
+  const achievements = [
+    { title: 'First Mock Test', unlocked: attempts.length >= 1, detail: attempts.length ? `Completed ${attempts.length} saved mock test${attempts.length === 1 ? '' : 's'}.` : 'Complete and save a mock test to unlock this milestone.' },
+    { title: '100 Questions', unlocked: totalQuestions >= 100, detail: `${totalQuestions} questions attempted across saved mock tests.` },
+    { title: '90% Test Score', unlocked: attempts.some((attempt) => attempt.percentage >= 90), detail: attempts.length ? `Best saved test score: ${Math.max(...attempts.map((attempt) => attempt.percentage))}%.` : 'A saved test score of 90% or higher unlocks this milestone.' },
+  ]
+  const unlockedCount = achievements.filter((achievement) => achievement.unlocked).length
+
   return (
     <PageLayout
       title="Achievements"
-      subtitle="Track milestones across consistency, speed, accuracy, and streak-based progress."
-      actions={<div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200">6 unlocked</div>}
+      subtitle="Milestones are calculated from your actual saved mock-test attempts."
+      actions={<div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200">{unlockedCount} of {achievements.length} unlocked</div>}
     >
+      {loading && <p className="mt-6 text-sm text-slate-400">Loading your saved achievements…</p>}
+      {error && <div role="alert" className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><span>{error}</span><button type="button" onClick={() => setRetryCount((count) => count + 1)} className="underline">Retry</button></div>}
       <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {achievementList.map((achievement) => (
+        {achievements.map((achievement) => (
           <div key={achievement.title} className={`rounded-[28px] border p-5 ${achievement.unlocked ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-slate-700 bg-slate-900/80'}`}>
             <div className="flex items-center justify-between">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950/80 text-2xl">
@@ -964,21 +1190,56 @@ function AchievementsPage() {
 }
 
 function NotificationsPage() {
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [attempts, setAttempts] = useState<MockAttemptSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  const notificationKey = `examiq_notifications_read_${session?.user.id ?? 'guest'}`
+  const [readIds, setReadIds] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem(notificationKey) ?? '[]') as number[] } catch { return [] }
+  })
+  useEffect(() => { localStorage.setItem(notificationKey, JSON.stringify(readIds)) }, [notificationKey, readIds])
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    loadMockTestHistory(session.token, controller.signal)
+      .then((data) => { setAttempts(data.attempts); setError(null) })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+  const unreadCount = attempts.filter((attempt) => !readIds.includes(attempt.id)).length
+
   return (
     <PageLayout
       title="Notifications"
-      subtitle="Stay on top of insights, study goals, mock-test feedback, and recommended actions."
-      actions={<button type="button" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Mark all read</button>}
+      subtitle="Recent notifications are generated from your actual saved mock-test attempts."
+      actions={<button type="button" disabled={unreadCount === 0} onClick={() => setReadIds((current) => [...new Set([...current, ...attempts.map((attempt) => attempt.id)])])} className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50">Mark all read ({unreadCount})</button>}
     >
+      {loading && <p className="mt-6 text-sm text-slate-400">Loading notifications…</p>}
+      {error && <div role="alert" className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><span>{error}</span><button type="button" onClick={() => setRetryCount((count) => count + 1)} className="underline">Retry</button></div>}
+      {!loading && !error && attempts.length === 0 && <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 p-8 text-center text-slate-300">No notifications yet. Your saved test results will appear here after your first mock test.</div>}
       <div className="mt-8 space-y-4">
-        {notificationItems.map((item) => (
-          <div key={item.title} className="rounded-[24px] border border-slate-700 bg-slate-900/80 p-5">
+        {attempts.map((attempt) => (
+          <div key={attempt.id} className={`rounded-[24px] border p-5 ${readIds.includes(attempt.id) ? 'border-slate-700 bg-slate-900/80' : 'border-violet-500/40 bg-violet-500/5'}`}>
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-lg font-bold text-white">{item.title}</div>
-                <div className="mt-2 text-sm text-slate-300">{item.detail}</div>
+                <div className="text-lg font-bold text-white">{attempt.category} test completed · {attempt.percentage}%</div>
+                <div className="mt-2 text-sm text-slate-300">{attempt.correctCount} correct, {attempt.incorrectCount} incorrect, {attempt.unansweredCount} unanswered · {attempt.timeTakenSeconds}s</div>
               </div>
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{item.time}</div>
+              <div className="flex items-center gap-3">
+                <div className="text-xs text-slate-400">{new Date(attempt.createdAt.replace(' ', 'T') + 'Z').toLocaleString()}</div>
+                {!readIds.includes(attempt.id) && <button type="button" onClick={() => setReadIds((current) => [...current, attempt.id])} className="rounded-full border border-violet-400/40 px-3 py-2 text-xs text-violet-200">Mark read</button>}
+                <Link to="/analytics" className="text-sm text-violet-300">View analytics</Link>
+              </div>
             </div>
           </div>
         ))}
@@ -1023,48 +1284,167 @@ function LearnPage() {
 }
 
 function PYQsPage() {
+  const [search, setSearch] = useState('')
+  const [examFilter, setExamFilter] = useState('All')
+  const [subjectFilter, setSubjectFilter] = useState('All')
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const bookmarkKey = `examiq_pyq_bookmarks_${session?.user.id ?? 'guest'}`
+  const responseKey = `examiq_pyq_responses_${session?.user.id ?? 'guest'}`
+  const [bookmarks, setBookmarks] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem(bookmarkKey) ?? '[]') as number[] } catch { return [] }
+  })
+  const [responses, setResponses] = useState<Record<number, { answer: string; checked: boolean }>>(() => {
+    try { return JSON.parse(localStorage.getItem(responseKey) ?? '{}') as Record<number, { answer: string; checked: boolean }> } catch { return {} }
+  })
+  useEffect(() => { localStorage.setItem(bookmarkKey, JSON.stringify(bookmarks)) }, [bookmarkKey, bookmarks])
+  useEffect(() => { localStorage.setItem(responseKey, JSON.stringify(responses)) }, [responseKey, responses])
+  const examsAvailable = [...new Set(pyqBank.map((item) => item.exam))]
+  const subjectsAvailable = [...new Set(pyqBank.map((item) => item.subject))]
+  const filteredQuestions = pyqBank.map((item, index) => ({ item, index })).filter(({ item }) => (
+    (examFilter === 'All' || item.exam === examFilter)
+    && (subjectFilter === 'All' || item.subject === subjectFilter)
+    && `${item.question} ${item.topic} ${item.subject}`.toLowerCase().includes(search.toLowerCase())
+  ))
+
   return (
     <PageLayout
       title="Previous Year Questions"
-      subtitle="Solve the most relevant previous papers with explanations, filters, and targeted revision loops."
-      actions={<button type="button" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Filter by exam</button>}
+      subtitle="The current small bank contains clearly labelled sample practice questions, not verified official previous-year papers."
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <input aria-label="Search questions" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search question or topic" className="rounded-full border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-white" />
+          <select aria-label="Filter by exam" value={examFilter} onChange={(event) => setExamFilter(event.target.value)} className="rounded-full border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-white">
+            <option>All</option>{examsAvailable.map((exam) => <option key={exam}>{exam}</option>)}
+          </select>
+          <select aria-label="Filter by subject" value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)} className="rounded-full border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-white">
+            <option>All</option>{subjectsAvailable.map((subject) => <option key={subject}>{subject}</option>)}
+          </select>
+        </div>
+      }
     >
-      <div className="mt-8 grid gap-5 xl:grid-cols-3">
-        {pyqBank.map((item, index) => (
-          <div key={`${item.exam}-${item.year}-${index}`} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
+      <div className="mt-5 text-sm text-slate-400">{filteredQuestions.length} sample question{filteredQuestions.length === 1 ? '' : 's'} · {Object.values(responses).filter((answer) => answer.checked).length} answered</div>
+      {filteredQuestions.length === 0 ? <div className="mt-8 rounded-[28px] border border-dashed border-slate-700 p-8 text-center text-slate-300">No sample questions match those filters.</div> : null}
+      <div className="mt-5 grid gap-5 xl:grid-cols-3">
+        {filteredQuestions.map(({ item, index }) => {
+          const response = responses[index]
+          const checked = Boolean(response?.checked)
+          return <div key={`${item.exam}-${item.year}-${index}`} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
             <div className="mb-4 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-              <span>{item.exam}</span>
-              <span>{item.year}</span>
+              <span>{item.exam} · {item.year}</span>
+              <button type="button" aria-pressed={bookmarks.includes(index)} onClick={() => setBookmarks((current) => current.includes(index) ? current.filter((saved) => saved !== index) : [...current, index])} className={`rounded-full border px-3 py-1 normal-case tracking-normal ${bookmarks.includes(index) ? 'border-amber-400 text-amber-200' : 'border-slate-600 text-slate-300'}`}>
+                {bookmarks.includes(index) ? '★ Saved' : '☆ Save'}
+              </button>
             </div>
             <div className="text-lg font-bold text-white">{item.question}</div>
             <div className="mt-4 space-y-2 text-sm text-slate-300">
-              {item.options.map((option) => (
-                <div key={option} className="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2">{option}</div>
-              ))}
+              {item.options.map((option) => {
+                const selected = response?.answer === option
+                const isCorrect = checked && option === item.answer
+                const isWrongSelection = checked && selected && !isCorrect
+                return <button key={option} type="button" disabled={checked} onClick={() => setResponses((current) => ({ ...current, [index]: { answer: option, checked: false } }))} className={`block w-full rounded-xl border px-3 py-2 text-left disabled:cursor-default ${isCorrect ? 'border-emerald-400 bg-emerald-500/10 text-emerald-100' : isWrongSelection ? 'border-rose-400 bg-rose-500/10 text-rose-100' : selected ? 'border-violet-400 bg-violet-500/10 text-white' : 'border-slate-700 bg-slate-950/70 hover:border-violet-400'}`}>{option}</button>
+              })}
             </div>
-            <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
-              Correct answer: {item.answer}
-            </div>
-            <p className="mt-4 text-sm leading-6 text-slate-300">{item.explanation}</p>
+            {!checked ? <button type="button" disabled={!response?.answer} onClick={() => setResponses((current) => ({ ...current, [index]: { answer: current[index]!.answer, checked: true } }))} className="mt-4 rounded-full bg-violet-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Check answer</button> : <>
+              <div className={`mt-4 rounded-2xl border p-3 text-sm ${response?.answer === item.answer ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100' : 'border-rose-500/20 bg-rose-500/10 text-rose-100'}`}>
+                {response?.answer === item.answer ? 'Correct.' : `Not quite. Correct answer: ${item.answer}`}
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-300">{item.explanation}</p>
+              <button type="button" onClick={() => setResponses((current) => { const next = { ...current }; delete next[index]; return next })} className="mt-3 rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Try again</button>
+            </>}
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-300">
               <span className="rounded-full border border-slate-700 px-2 py-1">{item.subject}</span>
               <span className="rounded-full border border-slate-700 px-2 py-1">{item.topic}</span>
               <span className="rounded-full border border-slate-700 px-2 py-1">{item.difficulty}</span>
             </div>
           </div>
-        ))}
+        })}
       </div>
     </PageLayout>
   )
 }
 
 function MockTestsPage() {
+  const navigate = useNavigate();
+  const [config, setConfig] = useState<MockTestConfig>({
+    category: 'Mixed',
+    difficulty: 'Mixed',
+    count: 10,
+    durationMinutes: 15,
+    adaptive: false,
+  })
+  const [history, setHistory] = useState<Array<{
+    id: number; category: string; difficulty: string; score: number; total: number;
+    percentage: number; createdAt: string
+  }>>([])
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(true)
+
+  useEffect(() => {
+    const session = getStoredSession()
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    apiFetch(`/api/mock-test/history`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load test history.')
+        return response.json() as Promise<{ attempts: typeof history }>
+      })
+      .then((data) => {
+        setHistory(data.attempts)
+        setHistoryError(null)
+      })
+      .catch((error: unknown) => {
+        setHistoryError(error instanceof Error ? error.message : 'Unable to load test history.')
+      })
+      .finally(() => setHistoryLoading(false))
+  }, [navigate])
+
+  const handleStartTest = (durationMinutes = config.durationMinutes) => {
+    navigate('/mock-test-take', { state: { config: { ...config, durationMinutes } } })
+  }
+
   return (
     <PageLayout
       title="Mock Tests"
       subtitle="Take sectionals, full-length mocks, and weak-area tests built around real competitive exam logic."
       actions={<Link to="/practice" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Launch practice</Link>}
     >
+      <section className="mt-8 rounded-[28px] border border-slate-700 bg-slate-900/80 p-5 md:p-7">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-violet-300">Build your test</p>
+          <h2 className="mt-2 text-xl font-bold text-white">Choose a category, level, and question count</h2>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="text-sm text-slate-300">Category
+            <select value={config.category} onChange={(event) => setConfig((current) => ({ ...current, category: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white">
+              <option>Mixed</option>
+              {questionCategoryNames.map((category) => <option key={category}>{category}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-slate-300">Difficulty
+            <select value={config.difficulty} onChange={(event) => setConfig((current) => ({ ...current, difficulty: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white">
+              <option>Mixed</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option>
+            </select>
+          </label>
+          <label className="text-sm text-slate-300">Number of questions
+            <input type="number" min={1} max={50} value={config.count} onChange={(event) => setConfig((current) => ({ ...current, count: Math.max(1, Math.min(50, Number(event.target.value) || 1)) }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" />
+          </label>
+          <label className="text-sm text-slate-300">Time limit (minutes)
+            <input type="number" min={1} max={180} value={config.durationMinutes} onChange={(event) => setConfig((current) => ({ ...current, durationMinutes: Math.max(1, Math.min(180, Number(event.target.value) || 1)) }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" />
+          </label>
+          <label className="flex items-center gap-3 self-end rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={config.adaptive} onChange={(event) => setConfig((current) => ({ ...current, adaptive: event.target.checked }))} className="accent-violet-500" />
+            Focus on my weak topics
+          </label>
+        </div>
+        <button type="button" onClick={() => handleStartTest()} className="mt-5 rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950">
+          Start Test
+        </button>
+      </section>
+
       <div className="mt-8 grid gap-5 lg:grid-cols-2 xl:grid-cols-4">
         {mockExamModes.map((mode) => (
           <div key={mode.name} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
@@ -1074,12 +1454,28 @@ function MockTestsPage() {
               <div>Duration: {mode.duration}</div>
               <div>Pattern: {mode.pattern}</div>
             </div>
-            <button type="button" className="mt-6 w-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-4 py-3 font-semibold text-slate-950">
+            <button
+              type="button"
+              onClick={() => handleStartTest(Number.parseInt(mode.duration, 10))}
+              className="mt-6 w-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-4 py-3 font-semibold text-slate-950 hover:opacity-90 transition-opacity cursor-pointer"
+            >
               Start Test
             </button>
           </div>
         ))}
       </div>
+      <section className="mt-8 rounded-[28px] border border-slate-700 bg-slate-900/80 p-5 md:p-7">
+        <h2 className="text-xl font-bold text-white">Previous test history</h2>
+        {historyLoading ? <p className="mt-4 text-sm text-slate-400">Loading your saved attempts...</p> : null}
+        {historyError ? <p role="alert" className="mt-4 text-sm text-rose-300">{historyError}</p> : null}
+        {!historyLoading && !historyError && history.length === 0 ? <p className="mt-4 text-sm text-slate-400">Your completed tests will appear here.</p> : null}
+        {history.length > 0 && <div className="mt-4 space-y-3">{history.map((attempt) => (
+          <div key={attempt.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+            <div><div className="font-semibold text-white">{attempt.category} · {attempt.difficulty}</div><div className="mt-1 text-xs text-slate-400">{new Date(attempt.createdAt).toLocaleString()}</div></div>
+            <div className="text-sm text-slate-200">{attempt.score}/{attempt.total} · {attempt.percentage}%</div>
+          </div>
+        ))}</div>}
+      </section>
     </PageLayout>
   )
 }
@@ -1088,16 +1484,16 @@ function RevisionCenterPage() {
   return (
     <PageLayout
       title="Revision Center"
-      subtitle="Keep high-yield formulas, fast tricks, and repeated mistakes in one place for last-minute revision."
-      actions={<button type="button" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200">Reset revision queue</button>}
+      subtitle="Build confidence with solved formulas, active-recall flashcards, your real attempt mistakes, and practical shortcuts."
     >
       <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {revisionCards.map((card) => (
-          <div key={card.title} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
+          <Link key={card.title} to={card.path} className="group flex min-h-56 flex-col rounded-[28px] border border-slate-700 bg-slate-900/80 p-5 transition hover:-translate-y-1 hover:border-violet-400 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
             <div className="text-xs uppercase tracking-[0.2em] text-emerald-300">{card.badge}</div>
-            <h3 className="mt-4 text-2xl font-black text-white">{card.title}</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-300">{card.detail}</p>
-          </div>
+            <h2 className="mt-4 text-2xl font-black text-white group-hover:text-violet-200">{card.title}</h2>
+            <p className="mt-3 flex-1 text-sm leading-6 text-slate-300">{card.detail}</p>
+            <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-violet-300">Open learning tool <ArrowRight size={16} /></span>
+          </Link>
         ))}
       </div>
     </PageLayout>
@@ -1105,46 +1501,230 @@ function RevisionCenterPage() {
 }
 
 function StudyPlannerPage() {
+  type PlanItem = {
+    id: number
+    day: string
+    title: string
+    detail: string
+    durationMinutes: number
+    completed: boolean
+  }
+  type PlannerForm = { day: string; title: string; subject: string; topic: string; durationMinutes: number }
+  const makeForm = (): PlannerForm => ({
+    day: new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10),
+    title: '',
+    subject: questionCategoryNames[0]!,
+    topic: '',
+    durationMinutes: 30,
+  })
+  const navigate = useNavigate()
+  const [session] = useState<SessionState | null>(() => getStoredSession())
+  const [items, setItems] = useState<PlanItem[]>([])
+  const [form, setForm] = useState<PlannerForm>(makeForm)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [filter, setFilter] = useState<'upcoming' | 'completed' | 'all'>('upcoming')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    apiFetch('/api/student/study-plan', {
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then(async (response) => {
+        const data = await response.json() as { items?: PlanItem[]; message?: string }
+        if (!response.ok) throw new Error(data.message ?? 'Could not load your study plan.')
+        setItems(data.items ?? [])
+        setError(null)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') setError(loadError.message)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
+  }, [navigate, retryCount, session])
+
+  const handleSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setNotice(null)
+    const payload = {
+      day: form.day,
+      title: form.title.trim(),
+      detail: `${form.subject} · ${form.topic.trim()}`,
+      durationMinutes: form.durationMinutes,
+      completed: editingId === null ? false : items.find((item) => item.id === editingId)?.completed ?? false,
+    }
+    try {
+      const response = await apiFetch(editingId === null ? '/api/student/study-plan' : `/api/student/study-plan/${editingId}`, {
+        method: editingId === null ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify(payload),
+      })
+      const data = await response.json() as { item?: PlanItem; message?: string }
+      if (!response.ok || !data.item) throw new Error(data.message ?? 'Could not save this study task.')
+      setItems((current) => editingId === null
+        ? [...current, data.item!].sort((left, right) => left.day.localeCompare(right.day) || left.id - right.id)
+        : current.map((item) => item.id === editingId ? data.item! : item))
+      setNotice(editingId === null ? 'Study task added.' : 'Study task updated.')
+      setEditingId(null)
+      setForm(makeForm())
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save this study task.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const updateItem = async (item: PlanItem, patch: Partial<PlanItem>) => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    const updated = { ...item, ...patch }
+    setError(null)
+    try {
+      const response = await apiFetch(`/api/student/study-plan/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify(updated),
+      })
+      const data = await response.json() as { item?: PlanItem; message?: string }
+      if (!response.ok || !data.item) throw new Error(data.message ?? 'Could not update this study task.')
+      setItems((current) => current.map((saved) => saved.id === item.id ? data.item! : saved))
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Could not update this study task.')
+    }
+  }
+
+  const removeItem = async (item: PlanItem) => {
+    if (!session) {
+      navigate('/login', { replace: true })
+      return
+    }
+    if (!window.confirm(`Delete “${item.title}” from your study plan?`)) return
+    setError(null)
+    try {
+      const response = await apiFetch(`/api/student/study-plan/${item.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.token}` },
+      })
+      if (!response.ok) {
+        const data = await response.json() as { message?: string }
+        throw new Error(data.message ?? 'Could not delete this study task.')
+      }
+      setItems((current) => current.filter((saved) => saved.id !== item.id))
+      if (editingId === item.id) {
+        setEditingId(null)
+        setForm(makeForm())
+      }
+      setNotice('Study task deleted.')
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete this study task.')
+    }
+  }
+
+  const startEdit = (item: PlanItem) => {
+    const [subject, ...topicParts] = item.detail.split(' · ')
+    setEditingId(item.id)
+    setForm({
+      day: item.day,
+      title: item.title,
+      subject: questionCategoryNames.includes(subject ?? '') ? subject! : questionCategoryNames[0]!,
+      topic: questionCategoryNames.includes(subject ?? '') ? topicParts.join(' · ') : item.detail,
+      durationMinutes: item.durationMinutes,
+    })
+    setNotice(null)
+  }
+  const visibleItems = items.filter((item) => filter === 'all' || (filter === 'completed' ? item.completed : !item.completed))
+  const plannedMinutes = visibleItems.reduce((total, item) => total + item.durationMinutes, 0)
+
   return (
     <PageLayout
       title="Study Planner"
-      subtitle="Map your exam timeline into daily study goals, revision blocks, and sectional test practice."
-      actions={<div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">98 days left</div>}
+      subtitle="Create and manage your own study sessions. Tasks are saved to your account and remain available after refresh."
+      actions={<div className="rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-sm font-semibold text-violet-200">{items.length} saved tasks</div>}
     >
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <h3 className="text-xl font-bold text-white">Today</h3>
-            <span className="text-sm text-slate-400">Daily goal: 2h 10m</span>
+      <div className="mt-8 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+        <form onSubmit={handleSave} className="h-fit rounded-[28px] border border-slate-700 bg-slate-900/80 p-5 md:p-7">
+          <h2 className="text-xl font-bold text-white">{editingId === null ? 'Add a study task' : 'Edit study task'}</h2>
+          <div className="mt-5 space-y-4">
+            <label className="block text-sm text-slate-300">Task title
+              <input required maxLength={120} value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" placeholder="e.g. Revise percentages" />
+            </label>
+            <label className="block text-sm text-slate-300">Date
+              <input required type="date" value={form.day} onChange={(event) => setForm((current) => ({ ...current, day: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" />
+            </label>
+            <label className="block text-sm text-slate-300">Subject
+              <select value={form.subject} onChange={(event) => setForm((current) => ({ ...current, subject: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white">
+                {questionCategoryNames.map((category) => <option key={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="block text-sm text-slate-300">Topic or activity
+              <input required maxLength={500} value={form.topic} onChange={(event) => setForm((current) => ({ ...current, topic: event.target.value }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" placeholder="e.g. 20-question practice set" />
+            </label>
+            <label className="block text-sm text-slate-300">Duration (minutes)
+              <input required type="number" min={1} max={600} value={form.durationMinutes} onChange={(event) => setForm((current) => ({ ...current, durationMinutes: Number(event.target.value) }))} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-white" />
+            </label>
           </div>
-          <div className="space-y-4">
-            {studyPlanDay.map((item) => (
-              <div key={item.type} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-                <div>
-                  <div className="text-lg font-semibold text-white">{item.type}</div>
-                  <div className="text-sm text-slate-300">{item.task}</div>
-                </div>
-                <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-200">{item.slot}</span>
-              </div>
-            ))}
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button type="submit" disabled={saving || loading} className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950 disabled:opacity-50">{saving ? 'Saving…' : editingId === null ? 'Add task' : 'Save changes'}</button>
+            {editingId !== null && <button type="button" onClick={() => { setEditingId(null); setForm(makeForm()) }} className="rounded-full border border-slate-600 px-5 py-3 text-slate-200">Cancel edit</button>}
           </div>
-        </div>
+        </form>
 
-        <div className="space-y-5">
-          <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-            <div className="text-xl font-bold text-white">Weekly target</div>
-            <div className="mt-4 space-y-3 text-sm text-slate-300">
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3">Quant: 4 sessions</div>
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3">Reasoning: 3 sessions</div>
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-3">Current Affairs: 5 capsules</div>
+        <section className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5 md:p-7">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-white">Your study plan</h2>
+              <p className="mt-1 text-sm text-slate-400">{plannedMinutes} minutes in this view</p>
+            </div>
+            <div className="flex gap-2" aria-label="Filter study tasks">
+              {(['upcoming', 'completed', 'all'] as const).map((value) => (
+                <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={`rounded-full border px-3 py-2 text-xs capitalize ${filter === value ? 'border-violet-400 bg-violet-500/10 text-white' : 'border-slate-700 text-slate-300'}`}>{value}</button>
+              ))}
             </div>
           </div>
-          <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-5">
-            <div className="text-xl font-bold text-white">Exam date</div>
-            <div className="mt-4 text-3xl font-black text-white">22 Jun 2027</div>
-            <div className="mt-3 text-sm text-slate-300">Target exam: UPSC CSE</div>
+          {error && <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><span>{error}</span><button type="button" onClick={() => setRetryCount((value) => value + 1)} className="underline">Retry</button></div>}
+          {notice && <p role="status" className="mt-4 text-sm text-emerald-300">{notice}</p>}
+          {loading ? <p className="mt-6 text-sm text-slate-400">Loading saved tasks…</p> : null}
+          {!loading && visibleItems.length === 0 && !error && <div className="mt-6 rounded-2xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">{items.length === 0 ? 'Your plan is empty. Add a task to organize your next study session.' : `No ${filter} tasks right now.`}</div>}
+          <div className="mt-5 space-y-3">
+            {visibleItems.map((item) => (
+              <article key={item.id} className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className={`font-semibold ${item.completed ? 'text-slate-400 line-through' : 'text-white'}`}>{item.title}</h3>
+                      {item.completed && <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">Completed</span>}
+                    </div>
+                    <p className="mt-2 text-sm text-slate-300">{item.detail}</p>
+                    <p className="mt-2 text-xs text-slate-400">{item.day} · {item.durationMinutes} min</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => void updateItem(item, { completed: !item.completed })} className="rounded-full border border-emerald-500/30 px-3 py-2 text-xs text-emerald-200">{item.completed ? 'Reopen' : 'Complete'}</button>
+                    <button type="button" onClick={() => startEdit(item)} className="rounded-full border border-slate-600 px-3 py-2 text-xs text-slate-200">Edit</button>
+                    <button type="button" onClick={() => void removeItem(item)} className="rounded-full border border-rose-500/30 px-3 py-2 text-xs text-rose-200">Delete</button>
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
-        </div>
+        </section>
       </div>
     </PageLayout>
   )
@@ -1161,9 +1741,8 @@ function LandingPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
 
-    fetch(`${apiBase}/api/ai/analyze`, { signal: controller.signal })
+    apiFetch(`/api/ai/analyze`, { signal: controller.signal })
       .then((response) => {
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`)
@@ -1502,7 +2081,7 @@ function LandingPage() {
           </div>
         </section>
 
-        <section id="analytics" className="mt-20 rounded-[32px] border border-slate-700 bg-slate-900/70 p-8">
+        <section id="performance-preview" className="mt-20 rounded-[32px] border border-slate-700 bg-slate-900/70 p-8">
           <div className="mb-8 text-center">
             <p className="text-sm uppercase tracking-[0.2em] text-violet-300">Prep modes</p>
             <h2 className="mt-3 text-3xl font-black text-white md:text-5xl">Choose how you want to study</h2>
@@ -1544,6 +2123,7 @@ function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardResponse>(defaultDashboard)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
 
   useEffect(() => {
     const currentSession = getStoredSession()
@@ -1555,9 +2135,7 @@ function DashboardPage() {
     setSession(currentSession)
 
     const controller = new AbortController()
-    const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
-
-    fetch(`${apiBase}/api/student/dashboard`, {
+    apiFetch('/api/student/dashboard', {
       signal: controller.signal,
       headers: {
         Authorization: `Bearer ${currentSession.token}`,
@@ -1565,7 +2143,7 @@ function DashboardPage() {
     })
       .then((response) => {
         if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`)
+          throw new Error(`Dashboard request failed (${response.status}).`)
         }
         return response.json() as Promise<DashboardResponse>
       })
@@ -1575,7 +2153,7 @@ function DashboardPage() {
       })
       .catch((err) => {
         if (err instanceof Error && err.name !== 'AbortError') {
-          setError('Could not load the live dashboard, so the default student profile is shown.')
+          setError(err.message)
         }
       })
       .finally(() => {
@@ -1583,11 +2161,11 @@ function DashboardPage() {
       })
 
     return () => controller.abort()
-  }, [navigate])
+  }, [navigate, retryCount])
 
   const handleLogout = () => {
     clearStoredSession()
-    navigate('/', { replace: true })
+    navigate('/login', { replace: true })
   }
 
   const quickActions = [
@@ -1630,27 +2208,30 @@ function DashboardPage() {
 
       <main className="mx-auto max-w-7xl space-y-8 px-6 pb-12 pt-4 lg:px-10">
         {error && (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            {error}
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            <span>Could not load your dashboard: {error}</span>
+            <button type="button" onClick={() => setRetryCount((value) => value + 1)} className="rounded-full border border-amber-300/40 px-4 py-2 font-semibold hover:bg-amber-500/10">
+              Retry
+            </button>
           </div>
         )}
 
         <section className="grid gap-5 md:grid-cols-4">
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
             <p className="text-sm text-slate-400">Readiness</p>
-            <p className="mt-3 text-3xl font-bold text-white">{dashboard.readiness}%</p>
+            <p className="mt-3 text-3xl font-bold text-white">{dashboard.readiness === null ? '—' : `${dashboard.readiness}%`}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
             <p className="text-sm text-slate-400">Predicted score</p>
-            <p className="mt-3 text-3xl font-bold text-white">{dashboard.predictedScore}</p>
+            <p className="mt-3 text-3xl font-bold text-white">{dashboard.predictedScore === null ? 'Not available' : dashboard.predictedScore}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
             <p className="text-sm text-slate-400">Success rate</p>
-            <p className="mt-3 text-3xl font-bold text-emerald-300">{dashboard.successProbability}%</p>
+            <p className="mt-3 text-3xl font-bold text-emerald-300">{dashboard.successProbability === null ? 'Not available' : `${dashboard.successProbability}%`}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
             <p className="text-sm text-slate-400">Study streak</p>
-            <p className="mt-3 text-3xl font-bold text-violet-200">{dashboard.streakDays}d</p>
+            <p className="mt-3 text-3xl font-bold text-violet-200">{dashboard.streakDays === null ? 'Not tracked' : `${dashboard.streakDays}d`}</p>
           </div>
         </section>
 
@@ -1669,21 +2250,21 @@ function DashboardPage() {
             <div className="mb-6 rounded-2xl border border-violet-500/20 bg-violet-500/10 p-4">
               <div className="mb-3 flex items-center justify-between text-sm text-slate-200">
                 <span>Overall progress</span>
-                <span>{dashboard.readiness}%</span>
+                <span>{dashboard.readiness === null ? 'No test data yet' : `${dashboard.readiness}%`}</span>
               </div>
               <div className="h-2.5 rounded-full bg-slate-800">
-                <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{ width: `${dashboard.readiness}%` }} />
+                <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{ width: `${dashboard.readiness ?? 0}%` }} />
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
                 <p className="text-sm text-slate-400">Average accuracy</p>
-                <p className="mt-2 text-2xl font-bold text-white">{dashboard.averageAccuracy}%</p>
+                <p className="mt-2 text-2xl font-bold text-white">{dashboard.averageAccuracy === null ? '—' : `${dashboard.averageAccuracy}%`}</p>
               </div>
               <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
                 <p className="text-sm text-slate-400">Weekly study</p>
-                <p className="mt-2 text-2xl font-bold text-white">{dashboard.weeklyStudyHours}h</p>
+                <p className="mt-2 text-2xl font-bold text-white">{dashboard.weeklyStudyHours === null ? 'Not tracked' : `${dashboard.weeklyStudyHours}h`}</p>
               </div>
             </div>
 
@@ -1694,6 +2275,7 @@ function DashboardPage() {
                   <div key={`${value}-${index}`} className="flex-1 rounded-t-xl bg-gradient-to-t from-violet-500 to-cyan-400" style={{ height: `${value}%` }} />
                 ))}
               </div>
+              {dashboard.weeklyTrend.length === 0 && <p className="mt-3 text-sm text-slate-400">Complete a test to start your score trend.</p>}
             </div>
           </div>
 
@@ -1892,9 +2474,7 @@ function PracticePage() {
     setSession(currentSession)
 
     const controller = new AbortController()
-    const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
-
-    fetch(`${apiBase}/api/mock-test`, {
+    apiFetch(`/api/mock-test?mode=practice&count=10`, {
       signal: controller.signal,
       headers: {
         Authorization: `Bearer ${currentSession.token}`,
@@ -1980,13 +2560,18 @@ function PracticePage() {
     setError(null)
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/mock-test/submit`, {
+      const response = await apiFetch(`/api/mock-test/submit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.token}`,
         },
-        body: JSON.stringify({ answers: selectedAnswers }),
+        body: JSON.stringify({
+          answers: selectedAnswers,
+          questionIds: questions.map((question) => question.id),
+          category: 'Mixed',
+          difficulty: 'Mixed',
+        }),
       })
 
       const data = await response.json()
@@ -2145,17 +2730,13 @@ function PracticePage() {
 function ProfilePage() {
   const navigate = useNavigate()
   const [session, setSession] = useState<SessionState | null>(null)
-  const [form, setForm] = useState({
-    examTarget: 'UPSC CSE 2027',
-    preferredStudyHours: 18,
-    dailyGoal: 'Quant + reasoning focus',
-    learningStyle: 'Goal-oriented',
-    reminderPreference: 'Evening',
-  })
+  const [form, setForm] = useState(defaultProfile)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     const currentSession = getStoredSession()
@@ -2165,10 +2746,10 @@ function ProfilePage() {
     }
 
     setSession(currentSession)
-
-    const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
-
-    fetch(`${apiBase}/api/student/profile`, {
+    setLoading(true)
+    setLoadFailed(false)
+    setError(null)
+    apiFetch(`/api/student/profile`, {
       headers: {
         Authorization: `Bearer ${currentSession.token}`,
       },
@@ -2180,21 +2761,23 @@ function ProfilePage() {
         return response.json() as Promise<typeof form>
       })
       .then((data) => {
+        setLoadFailed(false)
         setForm({
-          examTarget: data.examTarget ?? form.examTarget,
-          preferredStudyHours: Number(data.preferredStudyHours ?? form.preferredStudyHours),
-          dailyGoal: data.dailyGoal ?? form.dailyGoal,
-          learningStyle: data.learningStyle ?? form.learningStyle,
-          reminderPreference: data.reminderPreference ?? form.reminderPreference,
+          examTarget: data.examTarget ?? defaultProfile.examTarget,
+          preferredStudyHours: Number(data.preferredStudyHours ?? defaultProfile.preferredStudyHours),
+          dailyGoal: data.dailyGoal ?? defaultProfile.dailyGoal,
+          learningStyle: data.learningStyle ?? defaultProfile.learningStyle,
+          reminderPreference: data.reminderPreference ?? defaultProfile.reminderPreference,
         })
       })
       .catch((err) => {
+        setLoadFailed(true)
         setError(err instanceof Error ? err.message : 'Unable to load your profile.')
       })
       .finally(() => {
         setLoading(false)
       })
-  }, [navigate])
+  }, [navigate, retryCount])
 
   const handleChange = (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = event.target
@@ -2213,7 +2796,7 @@ function ProfilePage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/student/profile`, {
+      const response = await apiFetch(`/api/student/profile`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2254,7 +2837,7 @@ function ProfilePage() {
             <Link to="/dashboard" className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white">
               Dashboard
             </Link>
-            <button type="button" onClick={() => { clearStoredSession(); navigate('/'); }} className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white">
+            <button type="button" onClick={() => { clearStoredSession(); navigate('/login', { replace: true }); }} className="rounded-full border border-slate-600 px-4 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white">
               Logout
             </button>
           </div>
@@ -2279,7 +2862,8 @@ function ProfilePage() {
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
+          <form onSubmit={handleSubmit} aria-busy={loading || saving} className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-6">
+            {loading && <p role="status" className="mb-5 text-sm text-slate-400">Loading your saved profile…</p>}
             <div className="grid gap-5 md:grid-cols-2">
               <label className="block md:col-span-2">
                 <span className="mb-2 block text-sm text-slate-300">Exam target</span>
@@ -2319,8 +2903,9 @@ function ProfilePage() {
             </div>
 
             {error && (
-              <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-                {error}
+              <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+                <span>{error}</span>
+                {loadFailed && <button type="button" onClick={() => setRetryCount((value) => value + 1)} className="underline">Retry loading</button>}
               </div>
             )}
 
@@ -2371,7 +2956,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     setSubmitting(true)
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/auth/${isRegister ? 'register' : 'login'}`, {
+      const response = await apiFetch(`/api/auth/${isRegister ? 'register' : 'login'}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2416,7 +3001,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
           </p>
 
           <div className="mt-10 space-y-4 text-sm text-slate-200">
-            <div className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4">82% readiness score</div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4">Readiness insights from your saved tests</div>
             <div className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4">Focused weekly improvement plan</div>
             <div className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4">AI-powered topic direction</div>
           </div>
@@ -2469,6 +3054,245 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   )
 }
 
+function MockTestTakePage() {
+  const [questions, setQuestions] = useState<MockQuestion[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [submitted, setSubmitted] = useState(false);
+  const [results, setResults] = useState<any>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchQuestions = async () => {
+      try {
+        const token = getStoredSession()?.token;
+        const response = await apiFetch(`/api/mock-test?mode=practice&count=10`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setQuestions(data);
+          setLoading(false);
+        } else {
+          setLoadError(`Could not load questions (HTTP ${response.status}).`);
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Failed to load mock test:', error);
+        setLoadError('The question service could not be reached. Check the backend and retry.');
+        setLoading(false);
+      }
+    };
+
+    fetchQuestions();
+  }, []);
+
+  const handleAnswerChange = (questionId: string, answer: string) => {
+    setAnswers({
+      ...answers,
+      [questionId]: answer,
+    });
+  };
+
+  const handleNext = () => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
+    }
+  };
+
+  const handlePrevious = () => {
+    if (currentQuestionIndex > 0) {
+      setCurrentQuestionIndex(currentQuestionIndex - 1);
+    }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const token = getStoredSession()?.token;
+      const response = await apiFetch(`/api/mock-test/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          answers,
+          questionIds: questions.map((question) => question.id),
+          category: 'Mixed',
+          difficulty: 'Mixed',
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setResults(data);
+        setSubmitted(true);
+      } else {
+        setLoadError('Unable to submit this test. Please retry.');
+      }
+    } catch (error) {
+      console.error('Failed to submit test:', error);
+      setLoadError('The test could not be submitted. Check the connection and retry.');
+    }
+  };
+
+  if (loading) {
+    return (
+      <PageLayout title="Loading Test..." subtitle="">
+        <div className="flex justify-center items-center h-96">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-violet-500"></div>
+        </div>
+      </PageLayout>
+    );
+  }
+
+  if (submitted && results) {
+    return (
+      <PageLayout
+        title="Test Results"
+        subtitle={`Your Score: ${results.percentage}%`}
+        actions={<Link to="/mock-tests" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Back to Mock Tests</Link>}
+      >
+        <div className="mt-8 space-y-6">
+          <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-8">
+            <div className="mb-6">
+              <div className="text-lg font-semibold text-slate-200 mb-2">Verdict: <span className={`${results.verdict === 'Excellent' ? 'text-emerald-400' : results.verdict === 'Strong' ? 'text-blue-400' : 'text-orange-400'}`}>{results.verdict}</span></div>
+              <div className="text-sm text-slate-400">
+                Correct Answers: {results.correctCount} / {results.total}
+              </div>
+            </div>
+
+            {results.recommendations && results.recommendations.length > 0 && (
+              <div>
+                <h4 className="text-slate-200 font-semibold mb-3">Recommendations:</h4>
+                <div className="space-y-3">
+                  {results.recommendations.map((rec: any, idx: number) => (
+                    <div key={idx} className="rounded-lg border border-slate-600 bg-slate-800/50 p-3">
+                      <div className="text-sm font-semibold text-violet-300">{rec.topic}</div>
+                      <div className="text-sm text-slate-300 mt-1">{rec.action}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </PageLayout>
+    );
+  }
+
+  if (questions.length === 0) {
+    return (
+      <PageLayout title="Unable to Load Test" subtitle={loadError ?? 'No questions were returned for this test.'}>
+        <div className="flex flex-wrap justify-center gap-3">
+          <button type="button" onClick={() => window.location.reload()} className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Retry</button>
+          <Link to="/mock-tests" className="rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-5 py-3 font-semibold text-slate-950">Back to Mock Tests</Link>
+        </div>
+      </PageLayout>
+    );
+  }
+
+  const currentQuestion = questions[currentQuestionIndex];
+  const progress = Math.round(((currentQuestionIndex + 1) / questions.length) * 100);
+
+  return (
+    <PageLayout
+      title={`Question ${currentQuestionIndex + 1} of ${questions.length}`}
+      subtitle="Answer the following question"
+    >
+      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_300px]">
+        <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-8">
+          <div className="mb-6">
+            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-slate-400">{progress}% Complete</div>
+          </div>
+
+          <div className="mb-6">
+            <div className="text-xs uppercase tracking-[0.2em] text-violet-300 mb-2">{currentQuestion.category}</div>
+            <h3 className="text-xl font-semibold text-white">{currentQuestion.prompt}</h3>
+          </div>
+
+          {loadError && <div role="alert" className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{loadError}</div>}
+
+          <div className="space-y-3 mb-8">
+            {Object.entries(currentQuestion.options || {}).map(([key, value]) => (
+              <label key={key} className="flex items-center p-4 rounded-lg border-2 border-slate-700 bg-slate-800/50 cursor-pointer hover:border-violet-500 transition">
+                <input
+                  type="radio"
+                  name={`question-${currentQuestion.id}`}
+                  value={key}
+                  checked={answers[currentQuestion.id] === key}
+                  onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                  className="mr-3"
+                />
+                <span className="flex-1 text-slate-200">{key}. {value}</span>
+              </label>
+            ))}
+          </div>
+
+          <div className="flex gap-4">
+            <button
+              type="button"
+              onClick={handlePrevious}
+              disabled={currentQuestionIndex === 0}
+              className="flex-1 rounded-full border border-violet-500 px-6 py-3 font-semibold text-violet-400 hover:bg-violet-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+
+            {currentQuestionIndex === questions.length - 1 ? (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                className="flex-1 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950 hover:opacity-90 transition-opacity"
+              >
+                Submit Test
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleNext}
+                className="flex-1 rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950 hover:opacity-90 transition-opacity"
+              >
+                Next
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-slate-700 bg-slate-900/80 p-4">
+          <h4 className="text-sm font-semibold text-slate-200 mb-3">Questions Summary</h4>
+          <div className="grid grid-cols-4 gap-2">
+            {questions.map((q, idx) => (
+              <button
+                key={q.id}
+                onClick={() => setCurrentQuestionIndex(idx)}
+                className={`aspect-square rounded-lg font-semibold text-xs transition ${
+                  idx === currentQuestionIndex
+                    ? 'bg-violet-500 text-white'
+                    : answers[q.id]
+                      ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-500'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-violet-500'
+                }`}
+              >
+                {idx + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </PageLayout>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -2481,10 +3305,14 @@ function App() {
         <Route path="/practice" element={<PracticePage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/exams" element={<ExamsPage />} />
+        <Route path="/exams/:slug" element={<ExamDetailsPage />} />
         <Route path="/learn" element={<LearnPage />} />
         <Route path="/pyqs" element={<PYQsPage />} />
         <Route path="/mock-tests" element={<MockTestsPage />} />
+        <Route path="/mock-test-take" element={<MockTestRunner />} />
+        <Route path="/mock-test-take-legacy" element={<MockTestTakePage />} />
         <Route path="/revision" element={<RevisionCenterPage />} />
+        <Route path="/revision/:section" element={<RevisionToolPage />} />
         <Route path="/ai-insights" element={<AiInsightsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/prediction" element={<PredictionPage />} />
@@ -2494,7 +3322,7 @@ function App() {
         <Route path="/achievements" element={<AchievementsPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/learning-path" element={<LearningPathPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>
   )

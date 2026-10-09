@@ -157,3 +157,13 @@
 - Validate score ranges and attempt counts
 - Keep timestamps consistent
 - Prefer normalized references to avoid duplication
+
+## Implemented SQLite mock-test tables
+
+The running Node.js backend uses SQLite. On startup it seeds the static sample bank into:
+
+- `mock_test_questions`: question ID, category, topic, difficulty, prompt, four JSON-encoded options, correct answer, explanation, and marks. The category/difficulty index supports filtered test selection.
+- `mock_test_attempts`: user ID, selected category and difficulty, score, totals, correct/incorrect/unanswered counts, time taken, serialized result review, and creation time.
+- `revision_mistake_states`: per-user, per-attempt, per-question reviewed and dismissed flags. Mistake content is derived from each saved attempt's incorrect answers; dismissing a mistake does not remove the original result.
+
+The question bank is defined in `backend/src/questionBank.ts`; `initializeDatabase` inserts any missing seed questions without overwriting existing rows. Each saved result is scoped to the authenticated user's history.
