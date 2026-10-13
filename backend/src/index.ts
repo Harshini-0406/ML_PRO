@@ -332,7 +332,9 @@ app.use(cors({
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}))
+}));
+
+app.use(express.json());
 
 const mlServiceUrl = process.env.ML_SERVICE_URL ?? 'http://localhost:8000';
 
