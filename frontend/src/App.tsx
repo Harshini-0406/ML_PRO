@@ -49,8 +49,8 @@ type DashboardResponse = {
   studentName: string
   examTarget: string
   readiness: number | null
-  predictedScore: number | null
-  successProbability: number | null
+  averageScore: number | null
+  passRate: number | null
   streakDays: number | null
   averageAccuracy: number | null
   weeklyStudyHours: number | null
@@ -158,8 +158,8 @@ const defaultDashboard: DashboardResponse = {
   studentName: 'Student',
   examTarget: 'Set your exam target in Profile',
   readiness: null,
-  predictedScore: null,
-  successProbability: null,
+  averageScore: null,
+  passRate: null,
   streakDays: null,
   averageAccuracy: null,
   weeklyStudyHours: null,
@@ -2222,16 +2222,16 @@ function DashboardPage() {
             <p className="mt-3 text-3xl font-bold text-white">{dashboard.readiness === null ? '—' : `${dashboard.readiness}%`}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
-            <p className="text-sm text-slate-400">Predicted score</p>
-            <p className="mt-3 text-3xl font-bold text-white">{dashboard.predictedScore === null ? 'Not available' : dashboard.predictedScore}</p>
+            <p className="text-sm text-slate-400">Average score</p>
+            <p className="mt-3 text-3xl font-bold text-white">{dashboard.averageScore === null ? 'No test data' : `${dashboard.averageScore}%`}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
-            <p className="text-sm text-slate-400">Success rate</p>
-            <p className="mt-3 text-3xl font-bold text-emerald-300">{dashboard.successProbability === null ? 'Not available' : `${dashboard.successProbability}%`}</p>
+            <p className="text-sm text-slate-400">Test pass rate</p>
+            <p className="mt-3 text-3xl font-bold text-emerald-300">{dashboard.passRate === null ? 'No test data' : `${dashboard.passRate}%`}</p>
           </div>
           <div className="rounded-3xl border border-slate-700 bg-slate-900/70 p-5">
-            <p className="text-sm text-slate-400">Study streak</p>
-            <p className="mt-3 text-3xl font-bold text-violet-200">{dashboard.streakDays === null ? 'Not tracked' : `${dashboard.streakDays}d`}</p>
+            <p className="text-sm text-slate-400">Practice streak</p>
+            <p className="mt-3 text-3xl font-bold text-violet-200">{dashboard.streakDays === null ? '—' : `${dashboard.streakDays}d`}</p>
           </div>
         </section>
 
@@ -2264,7 +2264,7 @@ function DashboardPage() {
               </div>
               <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
                 <p className="text-sm text-slate-400">Weekly study</p>
-                <p className="mt-2 text-2xl font-bold text-white">{dashboard.weeklyStudyHours === null ? 'Not tracked' : `${dashboard.weeklyStudyHours}h`}</p>
+                <p className="mt-2 text-2xl font-bold text-white">{dashboard.weeklyStudyHours === null ? 'No time recorded' : `${dashboard.weeklyStudyHours}h`}</p>
               </div>
             </div>
 

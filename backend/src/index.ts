@@ -12,6 +12,7 @@ import {
   getMockTestAttemptResults,
   getMockTestAttemptsByUser,
   getMockTestQuestions,
+  getDashboardMetrics,
   getPracticeAttemptsByUser,
   getRevisionMistakesByUser,
   getStudyPlansByUser,
@@ -718,6 +719,7 @@ app.get('/api/student/dashboard', authMiddleware, (req, res) => {
 
   const attempts = getPracticeAttemptsByUser(database, user.id);
   const topicMastery = getTopicMasteryByUser(database, user.id);
+  const dashboardMetrics = getDashboardMetrics(database, user.id);
   const studentProfile = getStudentProfileByUser(database, user.id) ?? {
     userId: user.id,
     examTarget: 'UPSC CSE 2027',
@@ -749,11 +751,11 @@ app.get('/api/student/dashboard', authMiddleware, (req, res) => {
     studentName: user.name,
     examTarget: studentProfile.examTarget,
     readiness: averagePercentage,
-    predictedScore: null,
-    successProbability: null,
-    streakDays: null,
+    averageScore: dashboardMetrics.averageScore,
+    passRate: dashboardMetrics.passRate,
+    streakDays: dashboardMetrics.streakDays,
     averageAccuracy: averagePercentage,
-    weeklyStudyHours: null,
+    weeklyStudyHours: dashboardMetrics.weeklyStudyHours,
     weakArea,
     strongArea,
     nextBestAction: weakestTopic

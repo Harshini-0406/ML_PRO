@@ -125,6 +125,19 @@ test('mock-test endpoints load questions, grade the selected test, and persist h
   assert.equal(result.review.length, 2);
   assert.ok(result.review.every((question) => question.correctAnswer && question.explanation));
 
+  const dashboardResponse = await fetch(`${getServerUrl()}/api/student/dashboard`, { headers: authorization });
+  assert.equal(dashboardResponse.status, 200);
+  const dashboard = await dashboardResponse.json() as {
+    averageScore: number | null;
+    passRate: number | null;
+    streakDays: number;
+    weeklyStudyHours: number | null;
+  };
+  assert.equal(dashboard.averageScore, 50);
+  assert.equal(dashboard.passRate, 0);
+  assert.equal(dashboard.streakDays, 1);
+  assert.equal(dashboard.weeklyStudyHours, 0.01);
+
   const mistakesResponse = await fetch(`${getServerUrl()}/api/revision/mistakes`, { headers: authorization });
   assert.equal(mistakesResponse.status, 200);
   const mistakes = await mistakesResponse.json() as {

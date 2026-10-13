@@ -485,6 +485,71 @@ export const getPracticeAttemptsByUser = (database: DatabaseSync, userId: string
   }));
 };
 
+export const getDashboardMetrics = (database: DatabaseSync, userId: string) => {
+  const mockSummary = database.prepare(`
+    SELECT COUNT(*) AS attemptCount,
+      AVG(percentage) AS averageScore,
+      SUM(CASE WHEN percentage >= 60 THEN 1 ELSE 0 END) AS passedCount,
+      SUM(CASE WHEN date(created_at) >= date('now', '-6 days') THEN 1 ELSE 0 END) AS weeklyAttemptCount,
+      SUM(CASE WHEN date(created_at) >= date('now', '-6 days') THEN time_taken_seconds ELSE 0 END) AS weeklySeconds
+    FROM mock_test_attempts
+    WHERE user_id = ?
+  `).get(userId) as {
+    attemptCount: number;
+    averageScore: number | null;
+    passedCount: number | null;
+    weeklyAttemptCount: number;
+    weeklySeconds: number | null;
+  };
+  const practiceSummary = database.prepare(`
+    SELECT COUNT(*) AS attemptCount,
+      AVG(percentage) AS averageScore,
+      SUM(CASE WHEN percentage >= 60 THEN 1 ELSE 0 END) AS passedCount
+    FROM practice_attempts
+    WHERE user_id = ?
+  `).get(userId) as {
+    attemptCount: number;
+    averageScore: number | null;
+    passedCount: number | null;
+  };
+  const activityDates = database.prepare(`
+    SELECT activityDate FROM (
+      SELECT date(created_at) AS activityDate FROM mock_test_attempts WHERE user_id = ?
+      UNION
+      SELECT date(created_at) AS activityDate FROM practice_attempts WHERE user_id = ?
+    )
+    ORDER BY activityDate DESC
+  `).all(userId, userId) as Array<{ activityDate: string }>;
+
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const activityDays = activityDates.map(({ activityDate }) => Date.parse(`${activityDate}T00:00:00Z`));
+  let streakDays = 0;
+  let expectedDay = activityDays[0];
+  if (expectedDay !== undefined && (today - expectedDay) / 86_400_000 <= 1) {
+    for (const activityDay of activityDays) {
+      if (activityDay !== expectedDay) break;
+      streakDays += 1;
+      expectedDay -= 86_400_000;
+    }
+  }
+
+  const hasMockAttempts = mockSummary.attemptCount > 0;
+  const hasPracticeAttempts = practiceSummary.attemptCount > 0;
+  const attemptCount = hasMockAttempts ? mockSummary.attemptCount : practiceSummary.attemptCount;
+  const averageScore = hasMockAttempts ? mockSummary.averageScore : practiceSummary.averageScore;
+  const passedCount = hasMockAttempts ? mockSummary.passedCount : practiceSummary.passedCount;
+
+  return {
+    averageScore: averageScore === null ? null : Math.round(averageScore),
+    passRate: attemptCount ? Math.round(((passedCount ?? 0) / attemptCount) * 100) : null,
+    streakDays,
+    weeklyStudyHours: mockSummary.weeklyAttemptCount && mockSummary.weeklySeconds
+      ? Math.round((mockSummary.weeklySeconds / 3600) * 100) / 100
+      : null,
+  };
+};
+
 export const saveStudyPlan = (database: DatabaseSync, plan: StudyPlanItem) => {
   const result = database
     .prepare(
