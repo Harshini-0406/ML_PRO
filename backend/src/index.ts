@@ -325,16 +325,14 @@ for (const user of listUsers(database)) {
   users.set(user.email, user);
 }
 
-app.use(cors({ origin: process.env.FRONTEND_URL ?? '*' }));
-app.use(express.json());
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }),
-);
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://ml-pro-seven.vercel.app'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}))
 
 const mlServiceUrl = process.env.ML_SERVICE_URL ?? 'http://localhost:8000';
 
